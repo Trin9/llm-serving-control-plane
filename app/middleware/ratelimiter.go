@@ -27,7 +27,7 @@ func getLimiter(userID string) *rate.Limiter {
 		return l
 	}
 	// 每秒允许 1 个请求，桶容量 5
-	l := rate.NewLimiter(1, 5)
+	l := rate.NewLimiter(50, 100)
 	limiters[userID] = l
 	return l
 }

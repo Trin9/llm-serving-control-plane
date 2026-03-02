@@ -1,3 +1,5 @@
+// Load test tool: matches curl request format, for Grafana TTFT/TPOT/QPS/GPU metrics
+// Usage: export TOKEN=your-key; go run test_metrics.go
 package main
 
 import (
@@ -6,90 +8,23 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
 )
 
-// ChatCompletionRequest represents the request structure for chat completion
+// ChatCompletionRequest matches curl format
 type ChatCompletionRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
+	Model      string    `json:"model"`
+	Messages   []Message `json:"messages"`
+	MaxTokens  int       `json:"max_tokens"`
+	Stream     bool      `json:"stream"`
 }
 
-// Message represents a chat message
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
-}
-
-func sendTestRequest(url string, wg *sync.WaitGroup, workerID int) {
-	defer wg.Done()
-
-	request := ChatCompletionRequest{
-		Model: "Qwen1.5-4B-Chat",
-		Messages: []Message{
-			{
-				Role:    "user",
-				Content: fmt.Sprintf("Hello, this is test message from worker %d", workerID),
-			},
-		},
-		Stream: true,
-	}
-
-	jsonData, err := json.Marshal(request)
-	if err != nil {
-		fmt.Printf("Worker %d: Error marshaling JSON: %v\n", workerID, err)
-		return
-	}
-
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		fmt.Printf("Worker %d: Error creating request: %v\n", workerID, err)
-		return
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer your-vllm-api-key")
-
-	client := &http.Client{
-		Timeout: 60 * time.Second,
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Printf("Worker %d: Error sending request: %v\n", workerID, err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("Worker %d: Non-OK status code: %d\n", workerID, resp.StatusCode)
-		return
-	}
-
-	// Read the streaming response
-	reader := resp.Body
-	buf := make([]byte, 4096)
-	for {
-		n, err := reader.Read(buf)
-		if n > 0 {
-			data := string(buf[:n])
-			if strings.Contains(data, "[DONE]") {
-				break
-			}
-		}
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			fmt.Printf("Worker %d: Error reading response: %v\n", workerID, err)
-			break
-		}
-	}
-
-	fmt.Printf("Worker %d: Completed request\n", workerID)
 }
 
 func fetchMetrics(url string) {
@@ -107,58 +42,119 @@ func fetchMetrics(url string) {
 	}
 
 	metrics := string(body)
-
-	// Check for our custom metrics
-	if strings.Contains(metrics, "ai_ttft_seconds") {
-		fmt.Println("✓ Found ai_ttft_seconds metric")
-	} else {
-		fmt.Println("✗ ai_ttft_seconds metric not found")
+	for _, key := range []string{"ai_ttft_seconds", "ai_tpot_seconds"} {
+		if strings.Contains(metrics, key) {
+			fmt.Printf("[OK] Found %s\n", key)
+		} else {
+			fmt.Printf("[--] %s not found\n", key)
+		}
 	}
 
-	if strings.Contains(metrics, "ai_tpot_seconds") {
-		fmt.Println("✓ Found ai_tpot_seconds metric")
-	} else {
-		fmt.Println("✗ ai_tpot_seconds metric not found")
-	}
-
-	// Print sample lines for verification
 	lines := strings.Split(metrics, "\n")
 	for _, line := range lines {
 		if strings.Contains(line, "ai_ttft_seconds") || strings.Contains(line, "ai_tpot_seconds") {
-			fmt.Println("Sample metric line:", line)
+			fmt.Println("  ", strings.TrimSpace(line))
 		}
 	}
 }
 
 func main() {
-	gateServiceURL := "http://localhost:8080/v1/chat/completions"
-	metricsURL := "http://localhost:8080/metrics"
+	gateServiceURL := getEnv("GATE_URL", "http://localhost:8080/v1/chat/completions")
+	metricsURL := getEnv("METRICS_URL", "http://localhost:8080/metrics")
+	token := getEnv("TOKEN", "your-vllm-api-key")
+	numWorkers := getEnvInt("WORKERS", 5)
 
-	fmt.Println("Starting AI metrics test...")
+	prompts := []string{
+		"Introduce Grafana",
+		"What is Prometheus?",
+		"Explain vLLM continuous batching",
+	}
 
-	// Wait a bit to see initial metrics
-	time.Sleep(2 * time.Second)
-	fmt.Println("\nInitial metrics:")
+	fmt.Println("=== AI Metrics Load Test ===")
+	fmt.Printf("Gate URL: %s\n", gateServiceURL)
+	fmt.Printf("Workers: %d\n", numWorkers)
+	fmt.Printf("Model: Qwen1.5-4B-Chat, max_tokens: 500, stream: true\n\n")
+
+	fmt.Println("Initial metrics:")
 	fetchMetrics(metricsURL)
 
-	// Send concurrent requests to generate metrics
 	var wg sync.WaitGroup
-	numWorkers := 3
-
 	fmt.Printf("\nSending %d concurrent requests...\n", numWorkers)
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
-		go sendTestRequest(gateServiceURL, &wg, i)
-		time.Sleep(100 * time.Millisecond) // Stagger requests
+		go func(id int) {
+			defer wg.Done()
+			sendOne(gateServiceURL, token, id, prompts)
+		}(i)
+		time.Sleep(100 * time.Millisecond)
 	}
-
 	wg.Wait()
 
-	// Wait for metrics to be processed
 	time.Sleep(2 * time.Second)
-
-	fmt.Println("\nFinal metrics after requests:")
+	fmt.Println("\nMetrics after requests:")
 	fetchMetrics(metricsURL)
-
-	fmt.Println("\nTest completed!")
+	fmt.Println("\nDone! Check Grafana for TTFT/TPOT/QPS/GPU curves.")
 }
+
+func getEnv(key, defaultVal string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return defaultVal
+}
+
+func getEnvInt(key string, defaultVal int) int {
+	if v := os.Getenv(key); v != "" {
+		var n int
+		if _, err := fmt.Sscanf(v, "%d", &n); err == nil {
+			return n
+		}
+	}
+	return defaultVal
+}
+
+func sendOne(url, token string, workerID int, prompts []string) {
+	content := "Introduce Grafana"
+	if len(prompts) > 0 {
+		content = prompts[workerID%len(prompts)]
+	}
+
+	reqBody := ChatCompletionRequest{
+		Model:     "Qwen1.5-4B-Chat",
+		MaxTokens: 500,
+		Stream:    true,
+		Messages:  []Message{Message{Role: "user", Content: content}},
+	}
+	jsonData, _ := json.Marshal(reqBody)
+
+	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("Worker %d: %v\n", workerID, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Printf("Worker %d: status %d %s\n", workerID, resp.StatusCode, string(body))
+		return
+	}
+
+	buf := make([]byte, 4096)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 && strings.Contains(string(buf[:n]), "[DONE]") {
+			break
+		}
+		if err != nil {
+			break
+		}
+	}
+	fmt.Printf("Worker %d: Completed\n", workerID)
+}
+
