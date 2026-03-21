@@ -1,0 +1,13 @@
+# 生产环境示例 - 使用 vLLM 引擎
+apiVersion: serving.trin.io/v1
+kind: InferenceService
+metadata:
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/managed-by: kustomize
+  name: qwen-service
+spec:
+  modelName: "Qwen/Qwen2.5-7B-Instruct"
+  replicas: 1
+  engine: "vllm"
+  resourceProfile: "gpu-small"

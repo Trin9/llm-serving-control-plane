@@ -1,0 +1,36 @@
+✅ LLM Operator 已成功安装！
+
+📦 Release Name: {{ .Release.Name }}
+📂 Namespace: {{ .Release.Namespace }}
+
+🎯 下一步操作：
+
+1. 检查 Operator 状态：
+   kubectl get deployment -n {{ .Release.Namespace }} {{ include "llm-operator.fullname" . }}-controller-manager
+
+2. 查看 Operator 日志：
+   kubectl logs -n {{ .Release.Namespace }} -l control-plane=controller-manager -f
+
+3. 验证 CRD 已创建：
+   kubectl get crd inferenceservices.serving.trin.io
+
+4. 创建示例 InferenceService：
+   kubectl apply -f - <<EOF
+   apiVersion: serving.trin.io/v1
+   kind: InferenceService
+   metadata:
+     name: test-model
+     namespace: {{ .Release.Namespace }}
+   spec:
+     modelName: "test-model"
+     engine: "mock"
+     replicas: 1
+   EOF
+
+5. 查看 InferenceService 状态：
+   kubectl get inferenceservices -n {{ .Release.Namespace }}
+   kubectl describe inferenceservice test-model -n {{ .Release.Namespace }}
+
+📚 文档：https://github.com/trin/llm-serving-control-plane
+
+🐛 问题反馈：请查看 Operator 日志或提交 Issue

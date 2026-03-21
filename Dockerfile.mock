@@ -1,0 +1,4 @@
+FROM python:3.9-alpine
+RUN pip install flask
+COPY scripts/mock_vllm.py /app/mock_vllm.py
+ENTRYPOINT ["python", "/app/mock_vllm.py"]

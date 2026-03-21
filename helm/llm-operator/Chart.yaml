@@ -1,0 +1,18 @@
+apiVersion: v2
+name: llm-operator
+description: A Kubernetes Operator for managing LLM inference services
+type: application
+version: 0.1.0
+appVersion: "1.0"
+keywords:
+  - llm
+  - inference
+  - operator
+  - kubernetes
+maintainers:
+  - name: trin
+home: https://github.com/trin/llm-serving-control-plane
+dependencies:
+  - name: gate-service
+    version: 0.1.0
+    repository: "file://./charts/gate-service"

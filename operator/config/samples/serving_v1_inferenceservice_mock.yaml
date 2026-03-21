@@ -1,0 +1,15 @@
+# 本地测试示例 - 使用 mock 引擎（无需 GPU）
+apiVersion: serving.trin.io/v1
+kind: InferenceService
+metadata:
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/managed-by: kustomize
+  name: mock-service
+spec:
+  modelName: "mock-model"
+  replicas: 2
+  # engine: "mock"  # 使用 mock 引擎，无需 GPU
+  image: "mock-vllm:latest"
+  imagePullPolicy: IfNotPresent
+  resourceProfile: "cpu-only"

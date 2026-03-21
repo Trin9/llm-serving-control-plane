@@ -1,0 +1,6 @@
+apiVersion: v2
+name: gate-service
+description: AI Gateway for token routing and billing
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

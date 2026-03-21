@@ -1,0 +1,25 @@
+# gate-service 的默认配置 (会被父级 values.yaml 中的 gate-service 部分覆盖)
+
+enabled: true
+replicaCount: 1
+
+image:
+  repository: gate-service
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+env:
+  # 路由后端的 URL 列表，逗号分隔。默认指向一个 mock 服务。
+  VLLM_URLS: "http://mock-service.default.svc.cluster.local:8000/v1/chat/completions"

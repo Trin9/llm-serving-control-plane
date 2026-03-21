@@ -1,0 +1,92 @@
+# 默认配置（适合本地开发环境）
+
+replicaCount: 1
+
+image:
+  repository: controller
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # 是否创建 ServiceAccount
+  create: true
+  # ServiceAccount 名称
+  name: "controller-manager"
+  # ServiceAccount 注解
+  annotations: {}
+
+# Pod 安全上下文
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container 安全上下文
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - "ALL"
+
+# 资源限制（本地环境）
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+# Leader Election 配置
+leaderElection:
+  enabled: true
+
+# 健康检查
+healthProbe:
+  port: 8081
+  livenessProbe:
+    initialDelaySeconds: 15
+    periodSeconds: 20
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+# Node 选择器
+nodeSelector: {}
+
+# 容忍度
+tolerations: []
+
+# 亲和性
+affinity: {}
+
+# 额外的标签（这些标签会合并到所有资源上）
+# 注意：不要重复定义已有的标签，避免覆盖模板函数生成的值
+labels: {}
+  # 示例：添加自定义标签
+  # environment: production
+  # team: ai-platform
+
+# ==========================================================
+# Subchart 配置 (AI 网关)
+# 这里的配置将覆盖 charts/gate-service/values.yaml 中的同名配置
+# ==========================================================
+gate-service:
+  # 默认开启网关组件
+  enabled: true
+  
+  replicaCount: 1
+  
+  image:
+    repository: gate-service
+    tag: latest
+    pullPolicy: IfNotPresent
+    
+  env:
+    # 你可以在这里全局覆盖网关路由的后端地址
+    VLLM_URLS: "http://mock-service.default.svc.cluster.local:8000/v1/chat/completions"

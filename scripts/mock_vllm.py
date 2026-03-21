@@ -50,5 +50,6 @@ def chat_completions():
     return Response(generate(), mimetype='text/event-stream')
 
 if __name__ == '__main__':
-    print("🚀 Mock vLLM Server running on http://localhost:8000")
-    app.run(port=8000)
+    print("🚀 Mock vLLM Server running on http://0.0.0.0:8000")
+    # 必须绑定 0.0.0.0，否则 K8s 里的其他 Pod 无法访问
+    app.run(host='0.0.0.0', port=8000)

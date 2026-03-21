@@ -1,0 +1,78 @@
+# 生产环境配置（适合 AWS EKS）
+
+# 高可用配置
+replicaCount: 2
+
+image:
+  # 生产环境应使用 ECR 或其他私有镜像仓库
+  repository: <your-ecr-repo>/llm-operator
+  tag: v1.0.0
+  pullPolicy: Always
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: "controller-manager"
+  # AWS 特定注解（例如 IRSA）
+  annotations:
+    # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/llm-operator-role
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - "ALL"
+
+# 生产环境资源配置
+resources:
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+  requests:
+    cpu: 500m
+    memory: 256Mi
+
+leaderElection:
+  enabled: true
+
+healthProbe:
+  port: 8081
+  livenessProbe:
+    initialDelaySeconds: 15
+    periodSeconds: 20
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+# Node 选择器（确保运行在 Linux 节点）
+nodeSelector:
+  kubernetes.io/os: linux
+
+# 容忍度（例如：允许运行在特定节点）
+tolerations: []
+# - key: "node-role.kubernetes.io/control-plane"
+#   effect: NoSchedule
+
+# 亲和性（Pod 反亲和性，实现高可用）
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchLabels:
+            control-plane: controller-manager
+        topologyKey: kubernetes.io/hostname
+
+labels:
+  control-plane: controller-manager
+  app.kubernetes.io/name: operator
+  app.kubernetes.io/managed-by: helm
+  environment: production
