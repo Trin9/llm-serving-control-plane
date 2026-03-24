@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-serving-dashboards
+  labels:
+    grafana_dashboard: "1"
+data:
+  llm-serving-monitor.json: |-
+{{ .Files.Get "dashboards/llm-serving-monitor.json" | indent 4 }}

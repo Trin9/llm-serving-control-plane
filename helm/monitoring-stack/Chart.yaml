@@ -1,0 +1,13 @@
+apiVersion: v2
+name: monitoring-stack
+description: A Helm chart for deploying Prometheus and Grafana
+version: 0.1.0
+appVersion: "1.0.0"
+
+dependencies:
+- name: prometheus
+  version: "19.6.0" # Use a stable version, e.g., from https://artifacthub.io/packages/helm/prometheus-community/prometheus
+  repository: "https://prometheus-community.github.io/helm-charts"
+- name: grafana
+  version: "6.50.6" # Use a stable version, e.g., from https://artifacthub.io/packages/helm/grafana/grafana
+  repository: "https://grafana.github.io/helm-charts"

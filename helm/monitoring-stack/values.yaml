@@ -1,0 +1,56 @@
+# Configure Prometheus
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    # Additional scrape configs from Phase 1 plan
+    additionalScrapeConfigs:
+    - job_name: 'gate-service'
+      kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names: ["default"] # Assuming gate-service is in the default namespace
+      relabel_configs:
+      - source_labels: [__meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+        regex: "llm-operator-gate-service;http" # Match the gate-service
+        action: keep
+    - job_name: 'dcgm-exporter'
+      kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names: ["default"] # Assuming dcgm-exporter is in the default namespace
+      relabel_configs:
+      - source_labels: [__meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+        regex: "nvidia-dcgm-exporter;metrics" # Common service name and port for dcgm-exporter helm chart
+        action: keep
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+# Configure Grafana
+grafana:
+  adminPassword: "admin"
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://monitoring-stack-prometheus-server.default.svc.cluster.local
+        access: proxy
+        isDefault: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi

@@ -26,7 +26,13 @@ err() { echo "[$(date +%H:%M:%S)] ERROR: $*" >&2; }
 port_in_use() {
   local port=$1
   if command -v ss &>/dev/null; then
-    ait_for_url() {
+    ss -tuln | grep -q ":$port "
+  else # Fallback for systems without ss (e.g., older BusyBox or very minimal containers)
+    netstat -tuln | grep -q ":$port "
+  fi
+}
+
+wait_for_url() {
   local url=$1
   local name=$2
   local max_sec=${3:-60}
@@ -63,7 +69,8 @@ main() {
       --max-model-len "$VLLM_MAX_MODEL_LEN" \
       > "$LOG_DIR/vllm.log" 2>&1 &
     log "vLLM started, PID=$!, log: $LOG_DIR/vllm.log"
-    wait_for_url "http://localhost:8000/v1/models" "vLLM" 120 || i
+    wait_for_url "http://localhost:8000/v1/models" "vLLM" 120 || exit 1
+  fi
 
   # 2. 启动 gate-service
   log "--- [2/5] gate-service ---"
@@ -94,7 +101,7 @@ main() {
     if ! command -v dcgm-exporter &>/dev/null; then
       err "dcgm-exporter not found in PATH, skip"
     else
-      no-exporter > "$LOG_DIR/dcgm-exporter.log" 2>&1 &
+      nohup dcgm-exporter > "$LOG_DIR/dcgm-exporter.log" 2>&1 &
       log "dcgm-exporter started, PID=$!, log: $LOG_DIR/dcgm-exporter.log"
       sleep 2
     fi
@@ -125,7 +132,7 @@ main() {
     log "Grafana already running (port 3000 in use), skip"
   else
     if [ ! -x /usr/sbin/grafana-server ]; then
-      err "grafar not found at /usr/sbin/grafana-server, skip"
+      err "grafana not found at /usr/sbin/grafana-server, skip"
     else
       nohup /usr/sbin/grafana-server \
         --config=/etc/grafana/grafana.ini \
@@ -153,4 +160,3 @@ main() {
 }
 
 main "$@"
-

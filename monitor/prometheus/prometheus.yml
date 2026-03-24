@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 10s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'gate-service'
+    static_configs:
+      - targets: ['gate-service:8080'] # Use the service name defined in docker-compose.yml
+
+  - job_name: 'dcgm-exporter'
+    # Assuming you might run dcgm-exporter in a container alongside
+    # For simplicity, we'll keep this for now but it might need a separate Dockerfile if not available
+    static_configs:
+      - targets: ['dcgm-exporter:9400'] # If running dcgm-exporter as a service in docker-compose
