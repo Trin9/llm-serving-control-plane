@@ -29,7 +29,7 @@ This mode is ideal for rapid local testing and development without a Kubernetes 
 ### 1.1. Starting the Local Environment
 
 1.  **Ensure Docker and Docker Compose are installed.**
-2.  **Navigate to the project root directory** in your terminal.
+2.  **Navigate to the project root directory** (`llm-serving-control-plane/`) in your terminal.
 3.  **Run the local startup script:**
     ```bash
     ./scripts/all-service-start.sh
@@ -57,7 +57,7 @@ This mode is ideal for rapid local testing and development without a Kubernetes 
 
 2.  **Check Metrics in Prometheus:**
     *   Access `http://localhost:9090/targets`.
-    *   Ensure `gate-service` and `prometheus` jobs are in an `UP` state.
+    *   Ensure `gate-service` is in an `UP` state. (Note: `dcgm-exporter` may not be scraped if not running locally).
     *   In Prometheus UI, query for metrics like `ai_ttft_seconds` or `http_requests_total`.
 
 3.  **Verify Dashboard in Grafana:**
@@ -74,3 +74,115 @@ This mode is ideal for rapid local testing and development without a Kubernetes 
     ```
     *This script will detect the local environment and use `docker-compose down`.* 
 
+## 2. Kubernetes Deployment (Helm)
+
+This mode is for deploying to a Kubernetes cluster.
+
+### 2.1. Prerequisites for Kubernetes Mode
+
+*   **`kubectl` configured** to point to your Kubernetes cluster.
+*   **`helm` CLI installed**.
+*   **Ensure Helm repositories are updated:**
+    ```bash
+    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+    helm repo add grafana https://grafana.github.io/helm-charts
+    helm repo add nvdp https://nvidia.github.io/helm-charts # For DCGM exporter
+    helm repo update
+    ```
+
+### 2.2. Starting the Kubernetes Environment
+
+1.  **Navigate to the project root directory** (`llm-serving-control-plane/`) in your terminal.
+2.  **Run the K8s startup script:**
+    ```bash
+    ./scripts/all-service-start.sh
+    ```
+    *This script will detect the Kubernetes environment and use `helm upgrade --install` for `llm-operator` and `monitoring-stack`. It will also attempt to deploy `nvidia-dcgm-exporter` via Helm.* 
+
+### 2.3. Accessing Services in Kubernetes
+
+Services are typically accessed via `kubectl port-forward` or Ingress.
+
+*   **Grafana:**
+    ```bash
+    kubectl port-forward service/monitoring-stack-grafana 3000:80
+    ```
+    Access Grafana at `http://localhost:3000` (Login: `admin`/`admin`).
+
+*   **Prometheus:**
+    ```bash
+    kubectl port-forward service/monitoring-stack-prometheus-server 9090:9090
+    ```
+    Access Prometheus at `http://localhost:9090`.
+
+*   **Gate Service Metrics:**
+    ```bash
+    kubectl port-forward service/llm-operator-gate-service 8080:8080
+    ```
+    Access metrics at `http://localhost:8080/metrics`.
+
+### 2.4. Verifying Functionality in Kubernetes
+
+1.  **Check Pod Status:**
+    ```bash
+    kubectl get pods
+    ```
+    Ensure all pods related to `llm-operator`, `gate-service`, `prometheus`, and `grafana` are in `Running` state.
+
+2.  **Send a test request to the Gate Service:**
+    *   Ensure `kubectl port-forward` for the gate service is running.
+    *   Run the following command:
+        ```bash
+        curl -X POST http://localhost:8080/v1/chat/completions 
+          -H "Content-Type: application/json" 
+          -d @test/stress-test-body.json
+        ```
+    You should receive a streamed response.
+
+3.  **Check Metrics in Prometheus:**
+    *   Access `http://localhost:9090/targets`.
+    *   Confirm `gate-service` and `dcgm-exporter` jobs are `UP`.
+    *   In Prometheus UI, query for metrics like `ai_ttft_seconds` or `http_requests_total`.
+
+4.  **Verify Dashboard in Grafana:**
+    *   Access Grafana via `kubectl port-forward` (as described above).
+    *   Log in with `admin`/`admin`.
+    *   Navigate to the dashboard named "LLM Serving Monitor (AI + Service + GPU)".
+    *   Ensure all panels are displaying data.
+
+### 2.5. Stopping the Kubernetes Environment
+
+1.  **Run the K8s shutdown script:**
+    ```bash
+    ./scripts/all-service-stop.sh
+    ```
+    *This script will detect the Kubernetes environment and use `helm uninstall` for the deployed releases.* 
+
+## 3. Stress Testing
+
+Use the `run-stress-test.sh` script for load testing. It supports both `ghz` (preferred) and a `curl`-based fallback.
+
+### 3.1. Running Stress Tests
+
+*   **Local Mode (Docker Compose):**
+    ```bash
+    ./scripts/run-stress-test.sh -c 10 -n 100 -u http://localhost:8080/v1/chat/completions
+    ```
+
+*   **Kubernetes Mode:**
+    *   Ensure your Kubernetes services are running and accessible (e.g., via `kubectl port-forward`).
+    *   Use the appropriate URL for your Kubernetes deployment:
+        ```bash
+        # Example for a service exposed via port-forward
+        ./scripts/run-stress-test.sh -c 10 -n 100 -u http://localhost:8080/v1/chat/completions 
+        ```
+
+### 3.2. Test Payload
+
+The request body for stress tests is defined in `test/stress-test-body.json`.
+
+### 3.3. Verifying Results
+
+*   **`run-stress-test.sh` Output:** Provides basic statistics like QPS and total time.
+*   **Prometheus:** Check metrics like `http_requests_total`, `ai_ttft_seconds_bucket`, `ai_tpot_seconds_bucket` for detailed performance data.
+*   **Grafana:** Observe the dashboard for trends in TTFT, TPOT, QPS, Latency, and GPU utilization during the test.

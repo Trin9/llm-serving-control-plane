@@ -24,6 +24,14 @@ main() {
     log "Installing/Upgrading monitoring-stack..."
     helm upgrade --install monitoring-stack "$PROJECT_ROOT_DIR/helm/monitoring-stack" --wait
 
+    # 3. Create InferenceService CR for mock-service (for local testing)
+    log "Creating InferenceService CR for mock-service..."
+    kubectl apply -f "$PROJECT_ROOT_DIR/operator/config/samples/serving_v1_inferenceservice_mock.yaml" || true
+    
+    # Wait for the operator to reconcile and create resources
+    log "Waiting for InferenceService to be reconciled..."
+    sleep 5
+
     log "Checking pods..."
     kubectl get pods
 

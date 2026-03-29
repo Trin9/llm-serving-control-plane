@@ -1,9 +1,10 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: llm-serving-dashboards
+  name: {{ include "monitoring-stack.fullname" . }}-grafana-dashboard
   labels:
+    {{- include "monitoring-stack.labels" . | nindent 4 }}
     grafana_dashboard: "1"
 data:
-  llm-serving-monitor.json: |-
+  llm-serving-monitor.json: |
 {{ .Files.Get "dashboards/llm-serving-monitor.json" | indent 4 }}

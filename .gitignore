@@ -47,4 +47,11 @@ terraform.rc
 *-config
 *.kubeconfig
 
+# Local/generated artifacts
+gate-service
+--data
+--header
+.aider.chat.history.md
+helm/monitoring-stack/charts/*.tgz
+
 
