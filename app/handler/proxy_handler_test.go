@@ -228,11 +228,21 @@ func TestPhaseSSEDataAndReport_UsageDegradation(t *testing.T) {
 func TestProxyHandlerFactory_RequestIDPropagation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	// Mock upstream server to echo back headers.
+	// Mock upstream server to echo back headers and return SSE format for billing to work.
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("X-Echo-Request-ID", r.Header.Get("X-Request-ID"))
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
+		flusher, _ := w.(http.Flusher)
+		// Send SSE data that will be parsed for token counting
+		_, _ = fmt.Fprint(w, `data: {"id":"1","choices":[{"index":0,"delta":{"content":"Hello"}}],"finish_reason":null}`+"\n\n")
+		flusher.Flush()
+		_, _ = fmt.Fprint(w, `data: {"id":"1","choices":[{"index":0,"delta":{"content":" World"}}],"finish_reason":null}`+"\n\n")
+		flusher.Flush()
+		_, _ = fmt.Fprint(w, `data: {"id":"1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":10,"total_tokens":15}}`+"\n\n")
+		flusher.Flush()
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
 	}))
 	defer upstreamServer.Close()
 
