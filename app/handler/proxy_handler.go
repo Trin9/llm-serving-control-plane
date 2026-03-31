@@ -180,6 +180,7 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 		}
 		proxyReq.Header.Set("Content-Type", "application/json")
 		proxyReq.Header.Set("Authorization", "Bearer your-vllm-api-key") // 如果 vLLM 设置了 key
+		proxyReq.Header.Set("X-Request-ID", requestID)                   // 将 Request ID 传递给上游
 
 		// C. 发送请求
 		client := &http.Client{
@@ -208,6 +209,9 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 				c.Writer.Header().Add(header, value)
 			}
 		}
+
+		// 保留我们自己设置的 X-Request-ID header (防止被上游覆盖)
+		c.Writer.Header().Set("X-Request-ID", requestID)
 
 		// 如果上游返回非 2xx 状态码，直接透传
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
