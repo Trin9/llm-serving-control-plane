@@ -3,6 +3,7 @@ package handler
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"gate-service/app/monitor"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // lineBufferPool 用于复用 bytes.Buffer，减少 GC 压力（内存优化 W11）
@@ -109,6 +111,8 @@ func PhaseSSEDataAndReport(line []byte, stats *TokenStats) bool {
 						stats.tokenCount = int(totalTokens)
 					}
 				}
+			} else {
+				fmt.Printf("⚠️ WARN: Failed to parse SSE data with usage: %v, content: %s\n", err, dataContent)
 			}
 			// 不返回 true，因为这是最后一个 Chunk，不需要继续处理
 		} else if !strings.Contains(dataContent, "[DONE]") {
@@ -135,6 +139,14 @@ func PhaseSSEDataAndReport(line []byte, stats *TokenStats) bool {
 func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// A. 读取客户端请求体
+		// 增加 Request ID / Trace ID 透传基础能力
+		requestID := c.Request.Header.Get("X-Request-ID")
+		if requestID == "" {
+			requestID = uuid.New().String()
+		}
+		c.Set("X-Request-ID", requestID)                 // 将 Request ID 存入 Gin Context，方便后续中间件或逻辑使用
+		c.Writer.Header().Set("X-Request-ID", requestID) // 将 Request ID 透传回客户端
+
 		bodyBytes, _ := io.ReadAll(c.Request.Body)
 
 		// 1. 根据请求内容动态选择后端 (W13 语义路由)
@@ -151,6 +163,8 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 			if modelName, ok := requestBody["model"].(string); ok {
 				model = modelName
 			}
+		} else {
+			fmt.Printf("⚠️ WARN: Failed to parse request body for model name: %v\n", err)
 		}
 
 		// 创建 TokenStats 实例用于跟踪指标
@@ -168,29 +182,52 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 		proxyReq.Header.Set("Authorization", "Bearer your-vllm-api-key") // 如果 vLLM 设置了 key
 
 		// C. 发送请求
-		client := &http.Client{}
+		client := &http.Client{
+			Timeout: 300 * time.Second, // 设置一个合理的超时时间，例如 300 秒 (5 分钟)
+		}
 		resp, err := client.Do(proxyReq)
 		if err != nil {
-			// 这里处理如果是 Context Cancelled 导致的错误
-			c.JSON(500, gin.H{"error": "Upstream error", "details": err.Error()})
+			// 处理 Context Cancelled 导致的错误 (客户端断开连接或网关超时)
+			if c.Request.Context().Err() == context.Canceled {
+				fmt.Printf("👋 Client disconnected or context cancelled: %v\n", err)
+				c.Status(http.StatusRequestTimeout) // 返回 408 Request Timeout 或 499 Client Closed Request
+				return
+			}
+			// 其他上游错误
+			fmt.Printf("🔥 Upstream request failed: %v\n", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "Upstream service error", "details": err.Error()})
 			return
 		}
 		defer resp.Body.Close()
 
 		// D. 处理响应
-		// 设置流式响应头
-		contentType := resp.Header.Get("Content-Type")
-		c.Writer.Header().Set("Content-Type", contentType)
-
-		// 如果是流，才设置 Connection: keep-alive
-		if strings.Contains(contentType, "event-stream") {
-			c.Writer.Header().Set("Connection", "keep-alive")
-			c.Writer.Header().Set("Transfer-Encoding", "chunked")
+		// 统一设置响应头
+		// 避免重复设置和语义冲突
+		for header, values := range resp.Header {
+			for _, value := range values {
+				c.Writer.Header().Add(header, value)
+			}
 		}
 
-		c.Writer.Header().Set("Cache-Control", "no-cache")
-		c.Writer.Header().Set("Connection", "keep-alive")
-		c.Writer.Header().Set("Transfer-Encoding", "chunked")
+		// 如果上游返回非 2xx 状态码，直接透传
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			c.Writer.WriteHeader(resp.StatusCode)
+			_, err = io.Copy(c.Writer, resp.Body)
+			if err != nil {
+				fmt.Printf("🔥 ERROR copying upstream error response body: %v\n", err)
+			}
+			return
+		}
+
+		// 对于 2xx 成功响应，且是 SSE 流，设置额外的流式响应头
+		// 修正 SSE 响应头和 chunked 行为，避免重复设置
+		if strings.Contains(resp.Header.Get("Content-Type"), "event-stream") {
+			c.Writer.Header().Set("Cache-Control", "no-cache")
+			c.Writer.Header().Set("Connection", "keep-alive")
+			c.Writer.Header().Set("Transfer-Encoding", "chunked") // 明确表示使用 chunked 传输
+		}
+
+		c.Writer.WriteHeader(resp.StatusCode) // 写入上游的 2xx 状态码
 
 		// E. 核心循环：读取 vLLM 的流，实时写回 Client
 		// 使用 32KB Reader 缓冲减少系统调用次数
@@ -237,7 +274,7 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 		// 注意：这里的 tokenCount 可能是估算值，也可能是官方 usage 值（如果 vLLM 返回了）
 		if stats.tokenCount > 0 {
 			record := billing.UsageRecord{
-				RequestID:   c.Writer.Header().Get("X-Request-ID"), // 假设有，如果没有为空
+				RequestID:   requestID, // 使用生成的或透传的 Request ID
 				Model:       stats.model,
 				User:        "anonymous", // 这里留坑，未来接 API Key 鉴权
 				TotalTokens: stats.tokenCount,
