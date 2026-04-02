@@ -77,7 +77,7 @@ func (s *MemoryBillingService) processQueue() {
 func (s *MemoryBillingService) handleRecord(record UsageRecord) {
 	// 模拟计算费用：假设 $0.000002 / Token
 	cost := float64(record.TotalTokens) * 0.000002
-	
+
 	// 在生产环境中，这里会写入数据库或调用支付服务
 	log.Printf("💰 [BILLING] Processed: Request=%s, Model=%s, Tokens=%d, Cost=$%.6f",
 		record.RequestID, record.Model, record.TotalTokens, cost)

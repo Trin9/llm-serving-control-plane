@@ -16,10 +16,10 @@ import (
 
 // ChatCompletionRequest matches curl format
 type ChatCompletionRequest struct {
-	Model      string    `json:"model"`
-	Messages   []Message `json:"messages"`
-	MaxTokens  int       `json:"max_tokens"`
-	Stream     bool      `json:"stream"`
+	Model     string    `json:"model"`
+	Messages  []Message `json:"messages"`
+	MaxTokens int       `json:"max_tokens"`
+	Stream    bool      `json:"stream"`
 }
 
 type Message struct {

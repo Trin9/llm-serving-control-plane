@@ -135,28 +135,85 @@ func PhaseSSEDataAndReport(line []byte, stats *TokenStats) bool {
 	return false
 }
 
-// ProxyHandlerFactory 返回一个注入了 BillingService 和 Router 的 gin.HandlerFunc
+// ProxyHandlerFactory returns a gin.HandlerFunc with injected BillingService and Router
 func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// A. 读取客户端请求体
-		// 增加 Request ID / Trace ID 透传基础能力
+		// A. Read client request and setup Request ID
 		requestID := c.Request.Header.Get("X-Request-ID")
 		if requestID == "" {
 			requestID = uuid.New().String()
 		}
-		c.Set("X-Request-ID", requestID)                 // 将 Request ID 存入 Gin Context，方便后续中间件或逻辑使用
-		c.Writer.Header().Set("X-Request-ID", requestID) // 将 Request ID 透传回客户端
+		c.Set("X-Request-ID", requestID)
+		c.Writer.Header().Set("X-Request-ID", requestID)
+
+		// B. Authentication & Quota Pre-check (if QuotaService is available)
+		var orgID, projectID string
+		if quotaSvc, ok := billingSvc.(billing.QuotaService); ok {
+			// Extract API Key from Authorization header
+			authHeader := c.Request.Header.Get("Authorization")
+			apiKey := ""
+			if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+				apiKey = authHeader[7:]
+			}
+
+			if apiKey == "" {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"error":   "Missing API key",
+					"message": "Authorization header with Bearer token is required",
+				})
+				return
+			}
+
+			// Authenticate API Key
+			apiKeyInfo, err := quotaSvc.AuthenticateAPIKey(apiKey)
+			if err != nil {
+				if err == billing.ErrAPIKeyNotFound || err == billing.ErrAPIKeyInactive {
+					c.JSON(http.StatusUnauthorized, gin.H{
+						"error":   "Invalid API key",
+						"message": err.Error(),
+					})
+				} else {
+					c.JSON(http.StatusInternalServerError, gin.H{
+						"error":   "Authentication service error",
+						"message": "Unable to verify API key",
+					})
+				}
+				return
+			}
+
+			orgID = apiKeyInfo.OrgID
+			projectID = apiKeyInfo.ProjectID
+
+			// Pre-check quota against debt threshold
+			// This blocks accounts that are severely in debt (< -10000 tokens)
+			// Accounts with small negative balances (e.g., -500) are still allowed
+			// The actual token deduction happens in ReportUsage after streaming completes
+			if err := quotaSvc.CheckQuota(orgID, projectID, 0); err != nil {
+				if err == billing.ErrInsufficientOrgQuota || err == billing.ErrInsufficientProjQuota {
+					c.JSON(http.StatusTooManyRequests, gin.H{
+						"error":   "Quota exceeded",
+						"message": "Your account has exceeded the debt limit. Please top up to continue.",
+					})
+				} else {
+					c.JSON(http.StatusServiceUnavailable, gin.H{
+						"error":   "Quota service error",
+						"message": "Unable to check quota",
+					})
+				}
+				return
+			}
+		}
 
 		bodyBytes, _ := io.ReadAll(c.Request.Body)
 
-		// 1. 根据请求内容动态选择后端 (W13 语义路由)
+		// 1. Route selection based on request content
 		targetURL := router.Route(bodyBytes)
 		if targetURL == "" {
 			c.JSON(503, gin.H{"error": "No available inference backends"})
 			return
 		}
 
-		// 解析请求体获取模型名称 (用于统计)
+		// Parse request body to extract model name
 		var requestBody map[string]any
 		model := "unknown"
 		if err := json.Unmarshal(bodyBytes, &requestBody); err == nil {
@@ -167,7 +224,7 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 			fmt.Printf("⚠️ WARN: Failed to parse request body for model name: %v\n", err)
 		}
 
-		// 创建 TokenStats 实例用于跟踪指标
+		// Create TokenStats instance for metrics tracking
 		stats := NewTokenStats(model, c.Request.URL.Path)
 
 		// B. 构建发往 vLLM 的请求
@@ -270,22 +327,30 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 			c.Writer.Flush() // 关键！必须立即刷新缓冲区，否则前端看不到打字机效果
 		}
 
-		// 流结束后记录 TPOT 指标
+		// Stream finished, record TPOT metrics
 		stats.RecordTPOT()
 
-		// F. 异步计费上报 (W12)
-		// 构造 UsageRecord 并投递到 Channel
-		// 注意：这里的 tokenCount 可能是估算值，也可能是官方 usage 值（如果 vLLM 返回了）
+		// F. Report usage for billing
+		// Construct UsageRecord and report it
+		// Note: tokenCount may be estimated or official value (if vLLM returned usage)
 		if stats.tokenCount > 0 {
 			record := billing.UsageRecord{
-				RequestID:   requestID, // 使用生成的或透传的 Request ID
+				RequestID:   requestID,
 				Model:       stats.model,
-				User:        "anonymous", // 这里留坑，未来接 API Key 鉴权
+				User:        "anonymous", // Placeholder for future user tracking
+				OrgID:       orgID,       // From API key authentication
+				ProjectID:   projectID,   // From API key authentication
 				TotalTokens: stats.tokenCount,
 				Timestamp:   time.Now(),
 			}
-			// 非阻塞调用，不会影响 HTTP 响应时间
-			_ = billingSvc.ReportUsage(record)
+			// Non-blocking call, won't affect HTTP response time
+			if err := billingSvc.ReportUsage(record); err != nil {
+				// Log billing errors but don't fail the request
+				// The user already got their response
+				if err != billing.ErrAlreadyProcessed {
+					fmt.Printf("⚠️ [BILLING] Failed to report usage: %v\n", err)
+				}
+			}
 		}
 	}
 }

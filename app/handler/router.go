@@ -106,10 +106,10 @@ func (r *ConsistentHashRouter) extractFeature(reqBody []byte) string {
 	}
 
 	feature := body.Model
-	
+
 	if len(body.Messages) > 0 {
 		var contentBuilder strings.Builder
-		
+
 		// 如果只有一条消息，就用这一条作为特征
 		if len(body.Messages) == 1 {
 			contentBuilder.WriteString(body.Messages[0].Content)

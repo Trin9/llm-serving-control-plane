@@ -1,0 +1,565 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>handler: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">gate-service/app/handler/helper.go (0.0%)</option>
+				
+				<option value="file1">gate-service/app/handler/proxy_handler.go (84.8%)</option>
+				
+				<option value="file2">gate-service/app/handler/router.go (0.0%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package handler
+
+var vllmURL string
+
+func SetVllmURL(url string) <span class="cov0" title="0">{
+        vllmURL = url
+}</span>
+
+func GetVllmURL() string <span class="cov0" title="0">{
+        return vllmURL
+}</span>
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">package handler
+
+import (
+        "bufio"
+        "bytes"
+        "context"
+        "encoding/json"
+        "fmt"
+        "io"
+        "net/http"
+        "strings"
+        "sync"
+        "time"
+
+        "gate-service/app/billing"
+        "gate-service/app/monitor"
+
+        "github.com/gin-gonic/gin"
+        "github.com/google/uuid"
+)
+
+// lineBufferPool 用于复用 bytes.Buffer，减少 GC 压力（内存优化 W11）
+// 在高并发长连接场景下，避免频繁分配新的字节切片
+var lineBufferPool = sync.Pool{
+        New: func() interface{} <span class="cov0" title="0">{
+                return bytes.NewBuffer(make([]byte, 0, 8192)) // 8KB 初始缓冲
+        }</span>,
+}
+
+// TokenStats 用于跟踪流式响应中的 token 统计信息
+type TokenStats struct {
+        model           string
+        route           string
+        startTime       time.Time
+        firstTokenTime  time.Time
+        tokenCount      int
+        firstTokenFound bool
+}
+
+// NewTokenStats 创建一个新的 TokenStats 实例
+func NewTokenStats(model, route string) *TokenStats <span class="cov8" title="1">{
+        return &amp;TokenStats{
+                model:     model,
+                route:     route,
+                startTime: time.Now(),
+        }
+}</span>
+
+// ProcessFirstToken 处理第一个 token，记录时间并计算 TTFT
+func (ts *TokenStats) ProcessFirstToken() <span class="cov8" title="1">{
+        if !ts.firstTokenFound </span><span class="cov8" title="1">{
+                ts.firstTokenFound = true
+                ts.firstTokenTime = time.Now()
+
+                // 计算 TTFT 并记录指标
+                ttft := ts.firstTokenTime.Sub(ts.startTime).Seconds()
+                monitor.AITimeToFirstToken.WithLabelValues(ts.model, ts.route).Observe(ttft)
+        }</span>
+}
+
+// IncrementTokenCount 增加 token 计数
+func (ts *TokenStats) IncrementTokenCount() <span class="cov8" title="1">{
+        ts.tokenCount++
+}</span>
+
+// RecordTPOT 在流结束时记录 TPOT 指标
+func (ts *TokenStats) RecordTPOT() <span class="cov8" title="1">{
+        if ts.firstTokenFound &amp;&amp; ts.tokenCount &gt; 1 </span><span class="cov8" title="1">{
+                endTime := time.Now()
+
+                // 计算总的有效 token 生成时间（排除首字时间）
+                totalTokenTime := endTime.Sub(ts.firstTokenTime).Seconds()
+
+                // 计算 TPOT（Time Per Output Token）- 排除第一个 token
+                tpot := totalTokenTime / float64(ts.tokenCount-1)
+
+                // 记录 TPOT 指标
+                monitor.AITimePerOutputToken.WithLabelValues(ts.model, ts.route).Observe(tpot)
+        }</span>
+}
+
+// PhaseSSEDataAndReport 检查并处理 SSE 数据行（W12 优化版）
+//
+// OpenAI 标准 SSE 响应结构示例：
+//
+//  1. 普通 Token 数据块 (每行开头有 "data: "):
+//     data: {"id":"...","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":null}]}
+//
+//  2. 包含统计信息的最后一个数据块 (vLLM 默认在最后一个 chunk 返回 usage):
+//     data: {"id":"...","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":10,"total_tokens":15}}
+//
+//  3. 结束标志:
+//     data: [DONE]
+//
+// 只对包含 usage 字段的最后一个 Chunk 做完整 JSON 解析，避免每个 Chunk 都消耗 CPU
+func PhaseSSEDataAndReport(line []byte, stats *TokenStats) bool <span class="cov8" title="1">{
+        lineStr := string(line)
+
+        if strings.HasPrefix(lineStr, "data: ") </span><span class="cov8" title="1">{
+                _, dataContent, _ := strings.Cut(lineStr, "data: ")
+
+                // 优化点：先快速检查是否包含 "usage" 字段（字符串匹配比 JSON 解析快得多）
+                if strings.Contains(dataContent, `"usage"`) </span><span class="cov8" title="1">{
+                        // 只有包含 usage 的最后一个 Chunk 才做完整 JSON 解析
+                        var sseData map[string]any
+                        if err := json.Unmarshal([]byte(dataContent), &amp;sseData); err == nil </span><span class="cov8" title="1">{
+                                // 提取官方 token 统计（如果存在）
+                                if usage, ok := sseData["usage"].(map[string]any); ok </span><span class="cov8" title="1">{
+                                        if totalTokens, ok := usage["total_tokens"].(float64); ok </span><span class="cov8" title="1">{
+                                                // 使用官方统计覆盖手动计数（更准确）
+                                                stats.tokenCount = int(totalTokens)
+                                        }</span>
+                                }
+                        } else<span class="cov0" title="0"> {
+                                fmt.Printf("⚠️ WARN: Failed to parse SSE data with usage: %v, content: %s\n", err, dataContent)
+                        }</span>
+                        // 不返回 true，因为这是最后一个 Chunk，不需要继续处理
+                } else<span class="cov8" title="1"> if !strings.Contains(dataContent, "[DONE]") </span><span class="cov8" title="1">{
+                        // 对于普通数据行，只做轻量级检查，不解析 JSON
+                        // 快速检查是否有 choices 字段（字符串级别）
+                        if strings.Contains(dataContent, `"choices"`) </span><span class="cov8" title="1">{
+                                // 这是一个有效的 token 数据，增加计数
+                                stats.IncrementTokenCount()
+
+                                if !stats.firstTokenFound </span><span class="cov8" title="1">{
+                                        // 处理第一个 token
+                                        stats.ProcessFirstToken()
+                                }</span>
+
+                                <span class="cov8" title="1">return true</span>
+                        }
+                }
+        }
+
+        <span class="cov8" title="1">return false</span>
+}
+
+// ProxyHandlerFactory 返回一个注入了 BillingService 和 Router 的 gin.HandlerFunc
+func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.HandlerFunc <span class="cov8" title="1">{
+        return func(c *gin.Context) </span><span class="cov8" title="1">{
+                // A. 读取客户端请求体
+                // 增加 Request ID / Trace ID 透传基础能力
+                requestID := c.Request.Header.Get("X-Request-ID")
+                if requestID == "" </span><span class="cov8" title="1">{
+                        requestID = uuid.New().String()
+                }</span>
+                <span class="cov8" title="1">c.Set("X-Request-ID", requestID)                 // 将 Request ID 存入 Gin Context，方便后续中间件或逻辑使用
+                c.Writer.Header().Set("X-Request-ID", requestID) // 将 Request ID 透传回客户端
+
+                bodyBytes, _ := io.ReadAll(c.Request.Body)
+
+                // 1. 根据请求内容动态选择后端 (W13 语义路由)
+                targetURL := router.Route(bodyBytes)
+                if targetURL == "" </span><span class="cov0" title="0">{
+                        c.JSON(503, gin.H{"error": "No available inference backends"})
+                        return
+                }</span>
+
+                // 解析请求体获取模型名称 (用于统计)
+                <span class="cov8" title="1">var requestBody map[string]any
+                model := "unknown"
+                if err := json.Unmarshal(bodyBytes, &amp;requestBody); err == nil </span><span class="cov8" title="1">{
+                        if modelName, ok := requestBody["model"].(string); ok </span><span class="cov8" title="1">{
+                                model = modelName
+                        }</span>
+                } else<span class="cov0" title="0"> {
+                        fmt.Printf("⚠️ WARN: Failed to parse request body for model name: %v\n", err)
+                }</span>
+
+                // 创建 TokenStats 实例用于跟踪指标
+                <span class="cov8" title="1">stats := NewTokenStats(model, c.Request.URL.Path)
+
+                // B. 构建发往 vLLM 的请求
+                // 使用路由选择的 targetURL
+                proxyReq, err := http.NewRequestWithContext(c.Request.Context(), "POST", targetURL, bytes.NewBuffer(bodyBytes))
+                if err != nil </span><span class="cov0" title="0">{
+                        fmt.Printf("🔥 CRITICAL ERROR: %v\n", err)
+                        c.JSON(500, gin.H{"error": "Upstream error", "details": err.Error()})
+                        return
+                }</span>
+                <span class="cov8" title="1">proxyReq.Header.Set("Content-Type", "application/json")
+                proxyReq.Header.Set("Authorization", "Bearer your-vllm-api-key") // 如果 vLLM 设置了 key
+                proxyReq.Header.Set("X-Request-ID", requestID)                   // 将 Request ID 传递给上游
+
+                // C. 发送请求
+                client := &amp;http.Client{
+                        Timeout: 300 * time.Second, // 设置一个合理的超时时间，例如 300 秒 (5 分钟)
+                }
+                resp, err := client.Do(proxyReq)
+                if err != nil </span><span class="cov8" title="1">{
+                        // 处理 Context Cancelled 导致的错误 (客户端断开连接或网关超时)
+                        if c.Request.Context().Err() == context.Canceled </span><span class="cov8" title="1">{
+                                fmt.Printf("👋 Client disconnected or context cancelled: %v\n", err)
+                                c.Status(http.StatusRequestTimeout) // 返回 408 Request Timeout 或 499 Client Closed Request
+                                return
+                        }</span>
+                        // 其他上游错误
+                        <span class="cov8" title="1">fmt.Printf("🔥 Upstream request failed: %v\n", err)
+                        c.JSON(http.StatusBadGateway, gin.H{"error": "Upstream service error", "details": err.Error()})
+                        return</span>
+                }
+                <span class="cov8" title="1">defer resp.Body.Close()
+
+                // D. 处理响应
+                // 统一设置响应头
+                // 避免重复设置和语义冲突
+                for header, values := range resp.Header </span><span class="cov8" title="1">{
+                        for _, value := range values </span><span class="cov8" title="1">{
+                                c.Writer.Header().Add(header, value)
+                        }</span>
+                }
+
+                // 保留我们自己设置的 X-Request-ID header (防止被上游覆盖)
+                <span class="cov8" title="1">c.Writer.Header().Set("X-Request-ID", requestID)
+
+                // 如果上游返回非 2xx 状态码，直接透传
+                if resp.StatusCode &lt; 200 || resp.StatusCode &gt;= 300 </span><span class="cov8" title="1">{
+                        c.Writer.WriteHeader(resp.StatusCode)
+                        _, err = io.Copy(c.Writer, resp.Body)
+                        if err != nil </span><span class="cov0" title="0">{
+                                fmt.Printf("🔥 ERROR copying upstream error response body: %v\n", err)
+                        }</span>
+                        <span class="cov8" title="1">return</span>
+                }
+
+                // 对于 2xx 成功响应，且是 SSE 流，设置额外的流式响应头
+                // 修正 SSE 响应头和 chunked 行为，避免重复设置
+                <span class="cov8" title="1">if strings.Contains(resp.Header.Get("Content-Type"), "event-stream") </span><span class="cov8" title="1">{
+                        c.Writer.Header().Set("Cache-Control", "no-cache")
+                        c.Writer.Header().Set("Connection", "keep-alive")
+                        c.Writer.Header().Set("Transfer-Encoding", "chunked") // 明确表示使用 chunked 传输
+                }</span>
+
+                <span class="cov8" title="1">c.Writer.WriteHeader(resp.StatusCode) // 写入上游的 2xx 状态码
+
+                // E. 核心循环：读取 vLLM 的流，实时写回 Client
+                // 使用 32KB Reader 缓冲减少系统调用次数
+                reader := bufio.NewReaderSize(resp.Body, 32*1024)
+
+                for </span><span class="cov8" title="1">{
+                        // 使用 ReadBytes('\n') 确保每次读取都是完整的一行
+                        // 这样 PhaseSSEDataAndReport 才能准确识别 "data: " 前缀和 "usage" 字段
+                        line, err := reader.ReadBytes('\n')
+                        if err != nil </span><span class="cov8" title="1">{
+                                if err != io.EOF </span><span class="cov0" title="0">{
+                                        fmt.Printf("🔥 ERROR reading from vLLM: %v\n", err)
+                                }</span>
+                                // 处理最后可能剩下的数据（如果没有以 \n 结尾）
+                                <span class="cov8" title="1">if len(line) &gt; 0 </span><span class="cov0" title="0">{
+                                        PhaseSSEDataAndReport(line, stats)
+                                        c.Writer.Write(line)
+                                        c.Writer.Flush()
+                                }</span>
+                                <span class="cov8" title="1">break</span>
+                        }
+
+                        <span class="cov8" title="1">if len(line) == 0 </span><span class="cov0" title="0">{
+                                continue</span>
+                        }
+
+                        // 检查 SSE 数据行并处理指标统计
+                        <span class="cov8" title="1">PhaseSSEDataAndReport(line, stats)
+
+                        // 实时写回 Client
+                        _, err = c.Writer.Write(line)
+                        if err != nil </span><span class="cov0" title="0">{
+                                // 客户端断开连接
+                                break</span>
+                        }
+                        <span class="cov8" title="1">c.Writer.Flush()</span> // 关键！必须立即刷新缓冲区，否则前端看不到打字机效果
+                }
+
+                // 流结束后记录 TPOT 指标
+                <span class="cov8" title="1">stats.RecordTPOT()
+
+                // F. 异步计费上报 (W12)
+                // 构造 UsageRecord 并投递到 Channel
+                // 注意：这里的 tokenCount 可能是估算值，也可能是官方 usage 值（如果 vLLM 返回了）
+                if stats.tokenCount &gt; 0 </span><span class="cov8" title="1">{
+                        record := billing.UsageRecord{
+                                RequestID:   requestID, // 使用生成的或透传的 Request ID
+                                Model:       stats.model,
+                                User:        "anonymous", // 这里留坑，未来接 API Key 鉴权
+                                TotalTokens: stats.tokenCount,
+                                Timestamp:   time.Now(),
+                        }
+                        // 非阻塞调用，不会影响 HTTP 响应时间
+                        _ = billingSvc.ReportUsage(record)
+                }</span>
+        }
+}
+
+// 💡 修改 HealthCheckHandler 以接受 *gin.Context
+func HealthCheckHandler(c *gin.Context) <span class="cov0" title="0">{ // 注意：参数现在是 c *gin.Context
+        // Gin 框架中，我们不再直接使用 w http.ResponseWriter 和 r *http.Request
+        // 而是通过 c.Writer 和 c.Request 来访问它们，但通常不需要直接操作它们。
+
+        // 使用 Gin 推荐的 c.String() 或 c.JSON() 方法来返回响应
+        // 这样它会自动设置状态码和响应头
+        c.String(http.StatusOK, "Status: OK")
+
+        // 如果想要返回 JSON:
+        // c.JSON(http.StatusOK, gin.H{"status": "ok"})
+
+        // log.Println("Health check accessed.")
+        // 注意：Gin 默认集成了 Logger 中间件，日志记录会更自动化
+}</span>
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">package handler
+
+import (
+        "crypto/sha256"
+        "encoding/json"
+        "fmt"
+        "sort"
+        "strings"
+        "sync"
+)
+
+// Router 定义了 AI 请求的路由策略接口
+type Router interface {
+        // Route 根据请求内容返回一个后端的 URL
+        Route(reqBody []byte) string
+        // UpdateBackends 更新后端 Pod 列表
+        UpdateBackends(urls []string)
+}
+
+// ConsistentHashRouter 实现了一致性哈希路由策略 (W13)
+type ConsistentHashRouter struct {
+        mu       sync.RWMutex
+        backends []string
+        replicas int // 虚拟节点数，用于平滑分布
+        nodes    map[uint32]string
+        keys     []uint32
+}
+
+func NewConsistentHashRouter(urls []string) *ConsistentHashRouter <span class="cov0" title="0">{
+        r := &amp;ConsistentHashRouter{
+                backends: urls,
+                replicas: 50, // 每个真实节点映射 50 个虚拟节点
+                nodes:    make(map[uint32]string),
+        }
+        r.UpdateBackends(urls)
+        return r
+}</span>
+
+// hash 将字符串映射为 uint32
+func (r *ConsistentHashRouter) hash(key string) uint32 <span class="cov0" title="0">{
+        h := sha256.New()
+        h.Write([]byte(key))
+        sum := h.Sum(nil)
+        return uint32(sum[0])&lt;&lt;24 | uint32(sum[1])&lt;&lt;16 | uint32(sum[2])&lt;&lt;8 | uint32(sum[3])
+}</span>
+
+// UpdateBackends 更新并重新构建哈希环
+func (r *ConsistentHashRouter) UpdateBackends(urls []string) <span class="cov0" title="0">{
+        r.mu.Lock()
+        defer r.mu.Unlock()
+
+        r.backends = urls
+        r.nodes = make(map[uint32]string)
+        r.keys = nil
+
+        for _, url := range urls </span><span class="cov0" title="0">{
+                for i := 0; i &lt; r.replicas; i++ </span><span class="cov0" title="0">{
+                        hash := r.hash(fmt.Sprintf("%s#%d", url, i))
+                        r.keys = append(r.keys, hash)
+                        r.nodes[hash] = url
+                }</span>
+        }
+        <span class="cov0" title="0">sort.Slice(r.keys, func(i, j int) bool </span><span class="cov0" title="0">{
+                return r.keys[i] &lt; r.keys[j]
+        }</span>)
+}
+
+// Route 实现逻辑：解析 Prompt 前缀 -&gt; 哈希 -&gt; 选择后端
+func (r *ConsistentHashRouter) Route(reqBody []byte) string <span class="cov0" title="0">{
+        r.mu.RLock()
+        defer r.mu.RUnlock()
+
+        if len(r.backends) == 0 </span><span class="cov0" title="0">{
+                return ""
+        }</span>
+
+        // 1. 提取语义特征 (Prefix)
+        <span class="cov0" title="0">feature := r.extractFeature(reqBody)
+
+        // 2. 一致性哈希查找
+        hash := r.hash(feature)
+        idx := sort.Search(len(r.keys), func(i int) bool </span><span class="cov0" title="0">{
+                return r.keys[i] &gt;= hash
+        }</span>)
+
+        <span class="cov0" title="0">if idx == len(r.keys) </span><span class="cov0" title="0">{
+                idx = 0
+        }</span>
+
+        <span class="cov0" title="0">return r.nodes[r.keys[idx]]</span>
+}
+
+// extractFeature 提取 Prompt 的前缀特征用于路由
+// 策略：提取历史对话/上下文（排除最新的提问），以最大化 Prefix Cache 命中率
+func (r *ConsistentHashRouter) extractFeature(reqBody []byte) string <span class="cov0" title="0">{
+        var body struct {
+                Model    string `json:"model"`
+                Messages []struct {
+                        Role    string `json:"role"`
+                        Content string `json:"content"`
+                } `json:"messages"`
+        }
+
+        if err := json.Unmarshal(reqBody, &amp;body); err != nil </span><span class="cov0" title="0">{
+                return "default" // 解析失败则走默认路由
+        }</span>
+
+        <span class="cov0" title="0">feature := body.Model
+        
+        if len(body.Messages) &gt; 0 </span><span class="cov0" title="0">{
+                var contentBuilder strings.Builder
+                
+                // 如果只有一条消息，就用这一条作为特征
+                if len(body.Messages) == 1 </span><span class="cov0" title="0">{
+                        contentBuilder.WriteString(body.Messages[0].Content)
+                }</span> else<span class="cov0" title="0"> {
+                        // 如果有多条消息，拼接除了最后一条（当前新提问）之外的所有历史消息
+                        // 这样，同一个多轮对话的后续请求，都会得到相同的特征哈希
+                        for i := 0; i &lt; len(body.Messages)-1; i++ </span><span class="cov0" title="0">{
+                                contentBuilder.WriteString(body.Messages[i].Role)
+                                contentBuilder.WriteString(":")
+                                contentBuilder.WriteString(body.Messages[i].Content)
+                                contentBuilder.WriteString("|")
+                        }</span>
+                }
+
+                <span class="cov0" title="0">content := contentBuilder.String()
+                // 截取前 200 个字符，避免哈希计算过长，同时也能抓住核心的 System Prompt 和早期历史
+                if len(content) &gt; 200 </span><span class="cov0" title="0">{
+                        content = content[:200]
+                }</span>
+                <span class="cov0" title="0">feature += ":" + strings.TrimSpace(content)</span>
+        }
+
+        <span class="cov0" title="0">return feature</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>
