@@ -146,63 +146,14 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 		c.Set("X-Request-ID", requestID)
 		c.Writer.Header().Set("X-Request-ID", requestID)
 
-		// B. Authentication & Quota Pre-check (if QuotaService is available)
-		var orgID, projectID string
-		if quotaSvc, ok := billingSvc.(billing.QuotaService); ok {
-			// Extract API Key from Authorization header
-			authHeader := c.Request.Header.Get("Authorization")
-			apiKey := ""
-			if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
-				apiKey = authHeader[7:]
-			}
+		// B. Authentication & Quota Pre-check (Already handled by middleware)
+		// Extract IDs set by AuthMiddleware
+		orgID, _ := c.Get("orgID")
+		projectID, _ := c.Get("projectID")
 
-			if apiKey == "" {
-				c.JSON(http.StatusUnauthorized, gin.H{
-					"error":   "Missing API key",
-					"message": "Authorization header with Bearer token is required",
-				})
-				return
-			}
-
-			// Authenticate API Key
-			apiKeyInfo, err := quotaSvc.AuthenticateAPIKey(apiKey)
-			if err != nil {
-				if err == billing.ErrAPIKeyNotFound || err == billing.ErrAPIKeyInactive {
-					c.JSON(http.StatusUnauthorized, gin.H{
-						"error":   "Invalid API key",
-						"message": err.Error(),
-					})
-				} else {
-					c.JSON(http.StatusInternalServerError, gin.H{
-						"error":   "Authentication service error",
-						"message": "Unable to verify API key",
-					})
-				}
-				return
-			}
-
-			orgID = apiKeyInfo.OrgID
-			projectID = apiKeyInfo.ProjectID
-
-			// Pre-check quota against debt threshold
-			// This blocks accounts that are severely in debt (< -10000 tokens)
-			// Accounts with small negative balances (e.g., -500) are still allowed
-			// The actual token deduction happens in ReportUsage after streaming completes
-			if err := quotaSvc.CheckQuota(orgID, projectID, 0); err != nil {
-				if err == billing.ErrInsufficientOrgQuota || err == billing.ErrInsufficientProjQuota {
-					c.JSON(http.StatusTooManyRequests, gin.H{
-						"error":   "Quota exceeded",
-						"message": "Your account has exceeded the debt limit. Please top up to continue.",
-					})
-				} else {
-					c.JSON(http.StatusServiceUnavailable, gin.H{
-						"error":   "Quota service error",
-						"message": "Unable to check quota",
-					})
-				}
-				return
-			}
-		}
+		// Convert to strings
+		orgIDStr, _ := orgID.(string)
+		projectIDStr, _ := projectID.(string)
 
 		bodyBytes, _ := io.ReadAll(c.Request.Body)
 
@@ -337,9 +288,9 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 			record := billing.UsageRecord{
 				RequestID:   requestID,
 				Model:       stats.model,
-				User:        "anonymous", // Placeholder for future user tracking
-				OrgID:       orgID,       // From API key authentication
-				ProjectID:   projectID,   // From API key authentication
+				User:        "anonymous",  // Placeholder for future user tracking
+				OrgID:       orgIDStr,     // From context (set by middleware)
+				ProjectID:   projectIDStr, // From context (set by middleware)
 				TotalTokens: stats.tokenCount,
 				Timestamp:   time.Now(),
 			}

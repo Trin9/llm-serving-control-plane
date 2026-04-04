@@ -13,9 +13,19 @@ import (
 )
 
 func main() {
-	// 0. 初始化计费服务 (W12)
-	// 使用带缓冲的内存队列，解耦请求处理与计费逻辑
-	billingSvc := billing.NewMemoryBillingService(1000)
+	// 0. Initialize Billing Service (W12)
+	// Supports Redis for production and memory for local development
+	var billingSvc billing.BillingService
+	redisAddr := os.Getenv("REDIS_ADDR")
+
+	if redisAddr != "" {
+		// Use Redis-based billing for multi-tenant quota enforcement
+		billingSvc = billing.NewRedisBillingService(redisAddr, true) // failOpen=true
+	} else {
+		// Fallback to memory-based billing
+		billingSvc = billing.NewMemoryBillingService(1000)
+	}
+
 	billingSvc.Start()
 	defer billingSvc.Stop() // 确保程序退出时优雅关闭
 
@@ -35,9 +45,9 @@ func main() {
 
 	// API 路由组
 	api := r.Group("/v1")
-	api.Use(middleware.AuthMiddleware())       // 挂载鉴权
-	api.Use(middleware.RateLimitMiddleware())  // 挂载限流
-	api.Use(middleware.PrometheusMiddleware()) // 挂载限流
+	api.Use(middleware.AuthMiddleware(billingSvc)) // 挂载鉴权 (支持 JWT & API Key)
+	api.Use(middleware.RateLimitMiddleware())      // 挂载限流
+	api.Use(middleware.PrometheusMiddleware())     // 挂载监控
 
 	// --- 3. 暴露 /metrics 接口 ---
 	// Prometheus 会访问这个接口来“刮取”数据

@@ -29,6 +29,8 @@ spec:
           env:
             - name: VLLM_URLS
               value: {{ .Values.env.VLLM_URLS | quote }}
+            - name: REDIS_ADDR
+              value: {{ .Values.env.REDIS_ADDR | quote }}
           livenessProbe:
             httpGet:
               path: /health

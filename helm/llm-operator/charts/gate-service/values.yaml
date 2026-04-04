@@ -23,3 +23,4 @@ resources:
 env:
   # 路由后端的 URL 列表，逗号分隔。默认指向一个 mock 服务。
   VLLM_URLS: "http://mock-service.default.svc.cluster.local:8000/v1/chat/completions"
+  REDIS_ADDR: "llm-operator-redis.default.svc.cluster.local:6379"

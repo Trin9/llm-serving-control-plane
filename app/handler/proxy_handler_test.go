@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"gate-service/app/middleware"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -40,6 +41,46 @@ func (m *MockBillingService) Stop() {
 // MockRouter implements the Router interface for testing.
 type MockRouter struct {
 	mock.Mock
+}
+
+// MockQuotaService implements the billing.QuotaService interface for testing.
+type MockQuotaService struct {
+	MockBillingService
+}
+
+func (m *MockQuotaService) AuthenticateAPIKey(apiKey string) (*billing.APIKeyInfo, error) {
+	args := m.Called(apiKey)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*billing.APIKeyInfo), args.Error(1)
+}
+
+func (m *MockQuotaService) CheckQuota(orgID, projectID string, estimatedTokens int) error {
+	args := m.Called(orgID, projectID, estimatedTokens)
+	return args.Error(0)
+}
+
+func (m *MockQuotaService) CreateAPIKey(apiKey, orgID, projectID, name string) error {
+	return m.Called(apiKey, orgID, projectID, name).Error(0)
+}
+
+func (m *MockQuotaService) SetOrgQuota(orgID string, tokens int) error {
+	return m.Called(orgID, tokens).Error(0)
+}
+
+func (m *MockQuotaService) SetProjectQuota(projectID string, tokens int) error {
+	return m.Called(projectID, tokens).Error(0)
+}
+
+func (m *MockQuotaService) GetOrgQuota(orgID string) (int, error) {
+	args := m.Called(orgID)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *MockQuotaService) GetProjectQuota(projectID string) (int, error) {
+	args := m.Called(projectID)
+	return args.Int(0), args.Error(1)
 }
 
 // Route mocks the Route method of Router.
@@ -325,4 +366,57 @@ func TestProxyHandlerFactory_SSEHeaders(t *testing.T) {
 	assert.Equal(t, "keep-alive", recorder.Header().Get("Connection"))
 	assert.Equal(t, "chunked", recorder.Header().Get("Transfer-Encoding"))
 	assert.Equal(t, "custom-value", recorder.Header().Get("X-Custom-Header")) // Check custom header propagation
+}
+
+// TestProxyHandlerFactory_QuotaExceeded tests 429 response when quota is exhausted.
+func TestProxyHandlerFactory_QuotaExceeded(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	mockQuota := new(MockQuotaService)
+	mockQuota.On("AuthenticateAPIKey", "sk-low-quota").Return(&billing.APIKeyInfo{
+		OrgID: "org-1", ProjectID: "proj-1", Status: "active",
+	}, nil)
+	mockQuota.On("CheckQuota", "org-1", "proj-1", 0).Return(billing.ErrInsufficientOrgQuota)
+
+	mockRouter := new(MockRouter)
+
+	router := gin.Default()
+	router.Use(middleware.AuthMiddleware(mockQuota))
+	router.POST("/v1/chat/completions", ProxyHandlerFactory(mockQuota, mockRouter))
+
+	reqBody := []byte(`{"model": "test-model"}`)
+	req, _ := http.NewRequest("POST", "/v1/chat/completions", bytes.NewBuffer(reqBody))
+	req.Header.Set("Authorization", "Bearer sk-low-quota")
+	req.Header.Set("Content-Type", "application/json")
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusTooManyRequests, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "Quota exceeded")
+}
+
+// TestProxyHandlerFactory_InvalidAPIKey tests 401 response for invalid API keys.
+func TestProxyHandlerFactory_InvalidAPIKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	mockQuota := new(MockQuotaService)
+	mockQuota.On("AuthenticateAPIKey", "invalid-key").Return(nil, billing.ErrAPIKeyNotFound)
+
+	mockRouter := new(MockRouter)
+
+	router := gin.Default()
+	router.Use(middleware.AuthMiddleware(mockQuota))
+	router.POST("/v1/chat/completions", ProxyHandlerFactory(mockQuota, mockRouter))
+
+	reqBody := []byte(`{"model": "test-model"}`)
+	req, _ := http.NewRequest("POST", "/v1/chat/completions", bytes.NewBuffer(reqBody))
+	req.Header.Set("Authorization", "Bearer invalid-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "Invalid or expired token/API key")
 }

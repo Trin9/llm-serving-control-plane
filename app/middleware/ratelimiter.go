@@ -9,8 +9,17 @@ import (
 
 func RateLimitMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID := c.GetString("userID") // 从 JWT 中获取
-		limiter := getLimiter(userID)
+		// Use userID (JWT) or projectID (API Key) as the limiter key
+		authID := c.GetString("userID")
+		if authID == "" {
+			authID = c.GetString("projectID")
+		}
+
+		if authID == "" {
+			authID = "anonymous"
+		}
+
+		limiter := getLimiter(authID)
 		if !limiter.Allow() {
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "Too many requests"})
 			return
