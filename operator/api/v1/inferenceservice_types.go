@@ -71,10 +71,15 @@ type InferenceServiceStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Replicas is the observed number of replicas
+	// +optional
+	Replicas int32 `json:"replicas,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas
 // +kubebuilder:printcolumn:name="Model",type="string",JSONPath=".spec.modelName",description="Model name"
 // +kubebuilder:printcolumn:name="Replicas",type="integer",JSONPath=".spec.replicas",description="Desired replicas"
 // +kubebuilder:printcolumn:name="URL",type="string",JSONPath=".status.url",description="Service endpoint"

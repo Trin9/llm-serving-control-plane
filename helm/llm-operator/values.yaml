@@ -80,7 +80,7 @@ gate-service:
   # 默认开启网关组件
   enabled: true
   
-  replicaCount: 1
+  replicaCount: 3
   
   image:
     repository: gate-service

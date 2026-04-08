@@ -356,6 +356,8 @@ func (r *InferenceServiceReconciler) updateStatus(ctx context.Context, inferSvc 
 		replicas = *inferSvc.Spec.Replicas
 	}
 
+	inferSvc.Status.Replicas = deployment.Status.ReadyReplicas
+
 	if deployment.Status.ReadyReplicas == replicas {
 		// 全部 Ready
 		return r.updateStatusCondition(ctx, inferSvc, metav1.ConditionTrue, "DeploymentReady", "Inference service is ready")

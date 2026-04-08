@@ -162,6 +162,10 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              replicas:
+                description: Replicas is the observed number of replicas
+                format: int32
+                type: integer
               url:
                 description: |-
                   URL is the endpoint to access the inference service
@@ -174,4 +178,7 @@ spec:
     served: true
     storage: true
     subresources:
+      scale:
+        specReplicasPath: .spec.replicas
+        statusReplicasPath: .status.replicas
       status: {}

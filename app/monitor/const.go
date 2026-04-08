@@ -42,6 +42,14 @@ var (
 		},
 		[]string{"model", "route"}, // 标签：模型名、路由
 	)
+
+	// 模拟的 vLLM 排队请求数 (Gauge)
+	VllmRequestsWaiting = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "vllm:num_requests_waiting",
+			Help: "Mocked number of requests waiting to be processed",
+		},
+	)
 )
 
 func init() {
@@ -50,4 +58,5 @@ func init() {
 	prometheus.MustRegister(RequestDuration)
 	prometheus.MustRegister(AITimeToFirstToken)
 	prometheus.MustRegister(AITimePerOutputToken)
+	prometheus.MustRegister(VllmRequestsWaiting)
 }

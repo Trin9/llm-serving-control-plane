@@ -45,22 +45,16 @@ log "Target URL:  $GATE_URL"
 log "Concurrency: $CONCURRENCY"
 log "Total Req:   $TOTAL_REQUESTS"
 
-# 1. Try using ghz (if installed)
-if command -v ghz &>/dev/null; then
-    log "Using ghz for stress testing..."
-    # Note: ghz's HTTP support varies by version. This is a common pattern:
-    ghz --insecure \
-        --proto "" \
-        --call "$GATE_URL" \
-        -m POST \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $TOKEN" \
-        -D "$TEST_BODY_FILE" \
-        -n "$TOTAL_REQUESTS" \
-        -c "$CONCURRENCY" \
-        --format summary
-    exit 0
-fi
+# ghz --insecure \
+#     --http \
+#     -m POST \
+#     -H "Content-Type: application/json" \
+#     -H "Authorization: Bearer $TOKEN" \
+#     -D "$TEST_BODY_FILE" \
+#     -n "$TOTAL_REQUESTS" \
+#     -c "$CONCURRENCY" \
+#     --format summary \
+#     "$GATE_URL"
 
 # 2. Try using hey (another common tool)
 if command -v hey &>/dev/null; then

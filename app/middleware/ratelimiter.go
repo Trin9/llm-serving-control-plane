@@ -3,6 +3,8 @@ package middleware
 import (
 	"net/http"
 
+	"gate-service/app/monitor"
+
 	"github.com/gin-gonic/gin"
 	"golang.org/x/time/rate"
 )
@@ -24,6 +26,11 @@ func RateLimitMiddleware() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "Too many requests"})
 			return
 		}
+
+		// Simulate vLLM requests waiting/in-flight metric for KEDA scaling
+		monitor.VllmRequestsWaiting.Inc()
+		defer monitor.VllmRequestsWaiting.Dec()
+
 		c.Next()
 	}
 }
@@ -35,8 +42,8 @@ func getLimiter(userID string) *rate.Limiter {
 	if l, exists := limiters[userID]; exists {
 		return l
 	}
-	// 每秒允许 1 个请求，桶容量 5
-	l := rate.NewLimiter(50, 100)
+	// 每秒允许 1000 个请求，桶容量 2000 (针对压测放宽限制)
+	l := rate.NewLimiter(1000, 2000)
 	limiters[userID] = l
 	return l
 }
