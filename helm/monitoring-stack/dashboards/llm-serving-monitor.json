@@ -424,6 +424,145 @@
         "x": 0,
         "y": 21
       },
+      "id": 103,
+      "panels": [],
+      "title": "Gateway Runtime & Queue",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fill": 1,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 22
+      },
+      "id": 20,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "max": true,
+        "show": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "targets": [
+        {
+          "expr": "sum(vllm:num_requests_waiting)",
+          "legendFormat": "Requests Waiting",
+          "refId": "A"
+        }
+      ],
+      "title": "vLLM Requests Waiting (Queue Backlog)",
+      "type": "graph",
+      "yaxes": [
+        {
+          "format": "short",
+          "show": true
+        },
+        {
+          "format": "short",
+          "show": false
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fill": 1,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 22
+      },
+      "id": 21,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "max": true,
+        "show": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "targets": [
+        {
+          "expr": "go_goroutines{job=\"llm-operator-gate-service\"} or go_goroutines{service=\"llm-operator-gate-service\"}",
+          "legendFormat": "Goroutines ({{pod}})",
+          "refId": "A"
+        }
+      ],
+      "title": "Gate Service Goroutines",
+      "type": "graph",
+      "yaxes": [
+        {
+          "format": "short",
+          "show": true
+        },
+        {
+          "format": "short",
+          "show": false
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fill": 1,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 22
+      },
+      "id": 22,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "max": true,
+        "show": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "targets": [
+        {
+          "expr": "go_memstats_heap_alloc_bytes{job=\"llm-operator-gate-service\"} or go_memstats_heap_alloc_bytes{service=\"llm-operator-gate-service\"}",
+          "legendFormat": "Heap Alloc ({{pod}})",
+          "refId": "A"
+        }
+      ],
+      "title": "Gate Service Heap Memory",
+      "type": "graph",
+      "yaxes": [
+        {
+          "format": "bytes",
+          "show": true
+        },
+        {
+          "format": "short",
+          "show": false
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
       "id": 102,
       "panels": [],
       "title": "GPU Health (DCGM Exporter)",
@@ -439,7 +578,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 22
+        "y": 31
       },
       "id": 10,
       "legend": {
@@ -484,7 +623,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 22
+        "y": 31
       },
       "id": 11,
       "legend": {
@@ -527,7 +666,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 30
+        "y": 39
       },
       "id": 12,
       "legend": {
@@ -569,7 +708,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 30
+        "y": 39
       },
       "id": 13,
       "options": {
@@ -632,7 +771,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 30
+        "y": 39
       },
       "id": 14,
       "options": {
@@ -696,7 +835,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 38
+        "y": 47
       },
       "id": 15,
       "legend": {
@@ -744,7 +883,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 38
+        "y": 47
       },
       "id": 16,
       "legend": {

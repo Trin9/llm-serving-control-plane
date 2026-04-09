@@ -1,0 +1,19 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: gate-service-scaledobject
+  namespace: default
+spec:
+  scaleTargetRef:
+    name: llm-operator-gate-service
+  minReplicaCount: 1
+  maxReplicaCount: 5
+  cooldownPeriod: 300 # 5分钟冷却时间，大模型权重加载慢，避免频繁启停 (防抖)
+  pollingInterval: 15 # 每15秒轮询一次指标
+  triggers:
+  - type: prometheus
+    metadata:
+      serverAddress: http://monitoring-stack-prometheus-server.default.svc.cluster.local:80
+      metricName: requests_waiting
+      query: sum(vllm:num_requests_waiting)
+      threshold: "10" # 当排队请求超过10个时触发扩容
