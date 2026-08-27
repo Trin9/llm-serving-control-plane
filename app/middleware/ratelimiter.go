@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"sync"
 
 	"gate-service/app/monitor"
 
@@ -35,15 +36,15 @@ func RateLimitMiddleware() gin.HandlerFunc {
 	}
 }
 
-var limiters = make(map[string]*rate.Limiter)
+var limiters sync.Map
 
 func getLimiter(userID string) *rate.Limiter {
-	// 实际生产中要注意并发安全(sync.Map)和内存清理
-	if l, exists := limiters[userID]; exists {
-		return l
+	if l, ok := limiters.Load(userID); ok {
+		return l.(*rate.Limiter)
 	}
+
 	// 每秒允许 1000 个请求，桶容量 2000 (针对压测放宽限制)
-	l := rate.NewLimiter(1000, 2000)
-	limiters[userID] = l
-	return l
+	newLimiter := rate.NewLimiter(rate.Limit(1000), 2000)
+	actual, _ := limiters.LoadOrStore(userID, newLimiter)
+	return actual.(*rate.Limiter)
 }

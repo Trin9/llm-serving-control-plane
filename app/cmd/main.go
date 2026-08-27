@@ -5,22 +5,36 @@ import (
 	"gate-service/app/handler"
 	"gate-service/app/middleware"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-
-	"strings"
 )
+
+func boolFromEnv(name string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
 
 func main() {
 	// 0. Initialize Billing Service (W12)
 	// Supports Redis for production and memory for local development
 	var billingSvc billing.BillingService
 	redisAddr := os.Getenv("REDIS_ADDR")
+	failOpen := boolFromEnv("BILLING_FAIL_OPEN", false)
 
 	if redisAddr != "" {
 		// Use Redis-based billing for multi-tenant quota enforcement
-		billingSvc = billing.NewRedisBillingService(redisAddr, true) // failOpen=true
+		billingSvc = billing.NewRedisBillingService(redisAddr, failOpen)
 	} else {
 		// Fallback to memory-based billing
 		billingSvc = billing.NewMemoryBillingService(1000)

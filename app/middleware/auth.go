@@ -4,6 +4,7 @@ import (
 	"gate-service/app/billing"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/dgrijalva/jwt-go"
@@ -55,9 +56,13 @@ func AuthMiddleware(billingSvc billing.BillingService) gin.HandlerFunc {
 
 		// 2. Fallback to JWT Authentication
 		claims := jwt.MapClaims{}
+		jwtSecret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
+		if jwtSecret == "" {
+			jwtSecret = "dev-only-secret-change-me"
+			log.Printf("⚠️ [AUTH] JWT_SECRET not set; using dev-only fallback for local testing")
+		}
 		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-			// Replace with actual secret management in production
-			return []byte("a-string-secret-at-least-256-bits-long"), nil
+			return []byte(jwtSecret), nil
 		})
 
 		if err == nil && token.Valid {

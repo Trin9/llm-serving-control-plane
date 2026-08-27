@@ -83,8 +83,9 @@ func (r *InferenceServiceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// 3. 同步 Deployment
 	if err := r.reconcileDeployment(ctx, &inferSvc); err != nil {
 		logger.Error(err, "Failed to reconcile Deployment")
-		// 如果 Deployment 创建失败，更新 Status 为 Degraded
-		_ = r.updateStatusCondition(ctx, &inferSvc, metav1.ConditionFalse, "DeploymentFailed", err.Error())
+		_ = r.updateStatusCondition(ctx, &inferSvc, "Available", metav1.ConditionFalse, "DeploymentFailed", err.Error())
+		_ = r.updateStatusCondition(ctx, &inferSvc, "Progressing", metav1.ConditionFalse, "DeploymentFailed", err.Error())
+		_ = r.updateStatusCondition(ctx, &inferSvc, "Degraded", metav1.ConditionTrue, "DeploymentFailed", err.Error())
 		return ctrl.Result{}, err
 	}
 
@@ -339,8 +340,13 @@ func (r *InferenceServiceReconciler) updateStatus(ctx context.Context, inferSvc 
 
 	if err != nil {
 		if errors.IsNotFound(err) {
-			// Deployment 还没创建出来
-			return r.updateStatusCondition(ctx, inferSvc, metav1.ConditionFalse, "DeploymentNotFound", "Waiting for deployment to be created")
+			if err := r.updateStatusCondition(ctx, inferSvc, "Available", metav1.ConditionFalse, "DeploymentNotFound", "Waiting for deployment to be created"); err != nil {
+				return err
+			}
+			if err := r.updateStatusCondition(ctx, inferSvc, "Progressing", metav1.ConditionTrue, "DeploymentNotFound", "Waiting for deployment to be created"); err != nil {
+				return err
+			}
+			return r.updateStatusCondition(ctx, inferSvc, "Degraded", metav1.ConditionTrue, "DeploymentNotFound", "Waiting for deployment to be created")
 		}
 		return err
 	}
@@ -350,7 +356,6 @@ func (r *InferenceServiceReconciler) updateStatus(ctx context.Context, inferSvc 
 	inferSvc.Status.URL = serviceURL
 
 	// 3. 根据 Deployment 状态判断 Ready
-	// 期望副本数
 	replicas := int32(1)
 	if inferSvc.Spec.Replicas != nil {
 		replicas = *inferSvc.Spec.Replicas
@@ -359,19 +364,29 @@ func (r *InferenceServiceReconciler) updateStatus(ctx context.Context, inferSvc 
 	inferSvc.Status.Replicas = deployment.Status.ReadyReplicas
 
 	if deployment.Status.ReadyReplicas == replicas {
-		// 全部 Ready
-		return r.updateStatusCondition(ctx, inferSvc, metav1.ConditionTrue, "DeploymentReady", "Inference service is ready")
-	} else {
-		// 还在启动中
-		msg := fmt.Sprintf("Deployment is progressing (%d/%d ready)", deployment.Status.ReadyReplicas, replicas)
-		return r.updateStatusCondition(ctx, inferSvc, metav1.ConditionFalse, "DeploymentProgressing", msg)
+		if err := r.updateStatusCondition(ctx, inferSvc, "Available", metav1.ConditionTrue, "DeploymentReady", "Inference service is ready"); err != nil {
+			return err
+		}
+		if err := r.updateStatusCondition(ctx, inferSvc, "Progressing", metav1.ConditionFalse, "DeploymentReady", "Inference service is ready"); err != nil {
+			return err
+		}
+		return r.updateStatusCondition(ctx, inferSvc, "Degraded", metav1.ConditionFalse, "DeploymentReady", "Inference service is ready")
 	}
+
+	msg := fmt.Sprintf("Deployment is progressing (%d/%d ready)", deployment.Status.ReadyReplicas, replicas)
+	if err := r.updateStatusCondition(ctx, inferSvc, "Available", metav1.ConditionFalse, "DeploymentProgressing", msg); err != nil {
+		return err
+	}
+	if err := r.updateStatusCondition(ctx, inferSvc, "Progressing", metav1.ConditionTrue, "DeploymentProgressing", msg); err != nil {
+		return err
+	}
+	return r.updateStatusCondition(ctx, inferSvc, "Degraded", metav1.ConditionFalse, "DeploymentProgressing", msg)
 }
 
 // 辅助函数：更新 Condition 并提交
-func (r *InferenceServiceReconciler) updateStatusCondition(ctx context.Context, inferSvc *servingv1.InferenceService, status metav1.ConditionStatus, reason, message string) error {
+func (r *InferenceServiceReconciler) updateStatusCondition(ctx context.Context, inferSvc *servingv1.InferenceService, conditionType string, status metav1.ConditionStatus, reason, message string) error {
 	meta.SetStatusCondition(&inferSvc.Status.Conditions, metav1.Condition{
-		Type:               "Available", // 使用标准的 Available 类型
+		Type:               conditionType,
 		Status:             status,
 		Reason:             reason,
 		Message:            message,
