@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -149,9 +150,16 @@ func (r *InferenceServiceReconciler) reconcileDeployment(ctx context.Context, in
 
 // buildDeployment 根据 InferenceService 构建 Deployment 对象
 func (r *InferenceServiceReconciler) buildDeployment(inferSvc *servingv1.InferenceService) *appsv1.Deployment {
+	modelName := strings.TrimSpace(inferSvc.Spec.ModelName)
+	modelLabel := normalizeModelLabelValue(modelName)
 	labels := map[string]string{
 		"app":                              inferSvc.Name,
 		"serving.trin.io/inferenceservice": inferSvc.Name,
+		"serving.trin.io/model":            modelLabel,
+		"llm-model":                        modelLabel,
+		"app.kubernetes.io/name":           inferSvc.Name,
+		"app.kubernetes.io/instance":       inferSvc.Name,
+		"app.kubernetes.io/part-of":        "llm-serving-control-plane",
 	}
 
 	// 默认副本数为 1
@@ -303,9 +311,16 @@ func (r *InferenceServiceReconciler) reconcileService(ctx context.Context, infer
 
 // buildService 根据 InferenceService 构建 Service 对象
 func (r *InferenceServiceReconciler) buildService(inferSvc *servingv1.InferenceService) *corev1.Service {
+	modelName := strings.TrimSpace(inferSvc.Spec.ModelName)
+	modelLabel := normalizeModelLabelValue(modelName)
 	labels := map[string]string{
 		"app":                              inferSvc.Name,
 		"serving.trin.io/inferenceservice": inferSvc.Name,
+		"serving.trin.io/model":            modelLabel,
+		"llm-model":                        modelLabel,
+		"app.kubernetes.io/name":           inferSvc.Name,
+		"app.kubernetes.io/instance":       inferSvc.Name,
+		"app.kubernetes.io/part-of":        "llm-serving-control-plane",
 	}
 
 	return &corev1.Service{
@@ -330,6 +345,43 @@ func (r *InferenceServiceReconciler) buildService(inferSvc *servingv1.InferenceS
 }
 
 // updateStatus 更新 InferenceService 的 Status
+func normalizeModelLabelValue(modelName string) string {
+	trimmed := strings.TrimSpace(modelName)
+	if trimmed == "" {
+		return "default"
+	}
+
+	var builder strings.Builder
+	builder.Grow(len(trimmed))
+	lastSeparator := false
+	for _, r := range strings.ToLower(trimmed) {
+		switch {
+		case r >= 'a' && r <= 'z':
+			builder.WriteRune(r)
+			lastSeparator = false
+		case r >= '0' && r <= '9':
+			builder.WriteRune(r)
+			lastSeparator = false
+		case r == '-', r == '_', r == '.', r == '/', r == ':', r == ' ', r == '\\':
+			if !lastSeparator {
+				builder.WriteRune('-')
+				lastSeparator = true
+			}
+		default:
+			if !lastSeparator {
+				builder.WriteRune('-')
+				lastSeparator = true
+			}
+		}
+	}
+
+	result := strings.Trim(builder.String(), "-_.")
+	if result == "" {
+		return "default"
+	}
+	return result
+}
+
 func (r *InferenceServiceReconciler) updateStatus(ctx context.Context, inferSvc *servingv1.InferenceService) error {
 	// 1. 获取关联的 Deployment 状态
 	var deployment appsv1.Deployment

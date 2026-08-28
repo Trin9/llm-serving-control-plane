@@ -26,6 +26,15 @@ type ConsistentHashRouter struct {
 	keys     []uint32
 }
 
+// ModelConsistentHashRouter 将请求按 model 分桶，并对每个模型维护独立的哈希环。
+// 这使得不同模型不会共享同一条全局后端哈希环，保证路由边界清晰，也允许在未来
+// 为每个 model 绑定不同的 backend pool。
+type ModelConsistentHashRouter struct {
+	mu           sync.RWMutex
+	defaultRouter *ConsistentHashRouter
+	modelRouters map[string]*ConsistentHashRouter
+}
+
 func NewConsistentHashRouter(urls []string) *ConsistentHashRouter {
 	r := &ConsistentHashRouter{
 		backends: urls,
@@ -34,6 +43,110 @@ func NewConsistentHashRouter(urls []string) *ConsistentHashRouter {
 	}
 	r.UpdateBackends(urls)
 	return r
+}
+
+func NewModelConsistentHashRouter(defaultURLs []string) *ModelConsistentHashRouter {
+	return &ModelConsistentHashRouter{
+		defaultRouter: NewConsistentHashRouter(defaultURLs),
+		modelRouters: make(map[string]*ConsistentHashRouter),
+	}
+}
+
+func (r *ModelConsistentHashRouter) RegisterModelBackends(model string, urls []string) {
+	model = normalizeModelKey(model)
+	if model == "" {
+		r.UpdateBackends(urls)
+		return
+	}
+
+	normalized := normalizeURLs(urls)
+	pool := NewConsistentHashRouter(normalized)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if len(normalized) == 0 {
+		delete(r.modelRouters, model)
+		return
+	}
+	if r.defaultRouter == nil {
+		r.defaultRouter = NewConsistentHashRouter(normalized)
+	}
+	if pool == nil {
+		delete(r.modelRouters, model)
+		return
+	}
+	r.modelRouters[model] = pool
+}
+
+func (r *ModelConsistentHashRouter) UpdateModelBackends(modelBackends map[string][]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.modelRouters == nil {
+		r.modelRouters = make(map[string]*ConsistentHashRouter)
+	}
+
+	for model, urls := range modelBackends {
+		model = normalizeModelKey(model)
+		if model == "" {
+			if r.defaultRouter == nil {
+				r.defaultRouter = NewConsistentHashRouter([]string{})
+			}
+			r.defaultRouter.UpdateBackends(urls)
+			continue
+		}
+		r.modelRouters[model] = NewConsistentHashRouter(normalizeURLs(urls))
+	}
+
+	for model := range r.modelRouters {
+		if _, ok := modelBackends[model]; !ok {
+			delete(r.modelRouters, model)
+		}
+	}
+	if r.defaultRouter != nil {
+		if defaultURLs, ok := modelBackends["default"]; ok {
+			r.defaultRouter.UpdateBackends(defaultURLs)
+		}
+	}
+}
+
+func (r *ModelConsistentHashRouter) UpdateBackends(urls []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.defaultRouter == nil {
+		r.defaultRouter = NewConsistentHashRouter(urls)
+		return
+	}
+	r.defaultRouter.UpdateBackends(urls)
+}
+
+func (r *ModelConsistentHashRouter) Route(reqBody []byte) string {
+	model := extractModelName(reqBody)
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if model != "" {
+		if pool, ok := r.modelRouters[model]; ok && pool != nil && len(pool.backends) > 0 {
+			return pool.Route(reqBody)
+		}
+	}
+	if r.defaultRouter == nil {
+		return ""
+	}
+	return r.defaultRouter.Route(reqBody)
+}
+
+func extractModelName(reqBody []byte) string {
+	var body struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(reqBody, &body); err != nil {
+		return ""
+	}
+	return normalizeModelKey(body.Model)
 }
 
 // hash 将字符串映射为 uint32
@@ -49,11 +162,11 @@ func (r *ConsistentHashRouter) UpdateBackends(urls []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.backends = urls
+	r.backends = normalizeURLs(urls)
 	r.nodes = make(map[uint32]string)
 	r.keys = nil
 
-	for _, url := range urls {
+	for _, url := range r.backends {
 		for i := 0; i < r.replicas; i++ {
 			hash := r.hash(fmt.Sprintf("%s#%d", url, i))
 			r.keys = append(r.keys, hash)
@@ -130,6 +243,10 @@ func (r *ConsistentHashRouter) extractFeature(reqBody []byte) string {
 			content = content[:200]
 		}
 		feature += ":" + strings.TrimSpace(content)
+	}
+
+	if feature == "" {
+		feature = "default"
 	}
 
 	return feature

@@ -5,6 +5,8 @@ metadata:
   labels:
     app.kubernetes.io/name: operator
     app.kubernetes.io/managed-by: kustomize
+    llm-model: "qwen-qwen2-5-7b-instruct"
+    serving.trin.io/model: "qwen-qwen2-5-7b-instruct"
   name: qwen-service
 spec:
   modelName: "Qwen/Qwen2.5-7B-Instruct"

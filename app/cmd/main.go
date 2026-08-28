@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"gate-service/app/billing"
 	"gate-service/app/handler"
 	"gate-service/app/middleware"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -44,14 +46,22 @@ func main() {
 	defer billingSvc.Stop() // 确保程序退出时优雅关闭
 
 	// 1. 初始化语义路由 (W13)
-	// 支持从环境变量读取多个后端，用逗号分隔，例如: http://pod1:8000,http://pod2:8000
-	vllmURLs := os.Getenv("VLLM_URLS")
-	if vllmURLs == "" {
-		// 默认回退到单个后端
-		vllmURLs = "http://localhost:8000/v1/chat/completions"
+	// 生产环境下优先使用 Kubernetes Endpoints 自动发现后端；本地开发仍支持 VLLM_URLS 静态配置。
+	var backendSource handler.BackendSource = handler.NewStaticBackendSourceFromEnv("VLLM_URLS", []string{"http://localhost:8000/v1/chat/completions"})
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" || os.Getenv("USE_KUBERNETES_BACKEND_DISCOVERY") == "true" {
+		if k8sSource, err := handler.NewKubernetesBackendSourceFromEnv(); err == nil {
+			backendSource = k8sSource
+		}
 	}
-	backendList := strings.Split(vllmURLs, ",")
-	routerSvc := handler.NewConsistentHashRouter(backendList)
+	backendList, err := backendSource.Discover()
+	if err != nil || len(backendList) == 0 {
+		backendList = []string{"http://localhost:8000/v1/chat/completions"}
+		backendSource = handler.NewStaticBackendSource(backendList)
+	}
+	routerSvc := handler.NewModelConsistentHashRouter(backendList)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handler.StartBackendRefresh(ctx, backendSource, routerSvc, 30*time.Second)
 
 	r := gin.Default() // 自带 Logger 和 Recovery 中间件
 
