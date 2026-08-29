@@ -1,0 +1,15 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: qwen-service-vllm
+  namespace: default
+  labels:
+    app.kubernetes.io/component: inference-metrics
+spec:
+  selector:
+    matchLabels:
+      serving.trin.io/inferenceservice: qwen-service
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

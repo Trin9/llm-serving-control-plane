@@ -426,7 +426,7 @@
       },
       "id": 103,
       "panels": [],
-      "title": "Gateway Runtime & Queue",
+      "title": "Gateway Runtime",
       "type": "row"
     },
     {
@@ -453,12 +453,12 @@
       "linewidth": 2,
       "targets": [
         {
-          "expr": "sum(vllm:num_requests_waiting)",
-          "legendFormat": "Requests Waiting",
+          "expr": "sum by (service) (vllm:num_requests_waiting)",
+          "legendFormat": "{{service}}",
           "refId": "A"
         }
       ],
-      "title": "vLLM Requests Waiting (Queue Backlog)",
+      "title": "vLLM Backend Requests Waiting (Queue Backlog)",
       "type": "graph",
       "yaxes": [
         {

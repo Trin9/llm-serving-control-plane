@@ -1,11 +1,13 @@
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
-  name: gate-service-scaledobject
+  name: qwen-service-vllm-queue
   namespace: default
 spec:
   scaleTargetRef:
-    name: llm-operator-gate-service
+    apiVersion: serving.trin.io/v1
+    kind: InferenceService
+    name: qwen-service
   minReplicaCount: 1
   maxReplicaCount: 5
   cooldownPeriod: 300 # 5分钟冷却时间，大模型权重加载慢，避免频繁启停 (防抖)
@@ -14,6 +16,6 @@ spec:
   - type: prometheus
     metadata:
       serverAddress: http://monitoring-stack-prometheus-server.default.svc.cluster.local:80
-      metricName: requests_waiting
-      query: sum(vllm:num_requests_waiting)
-      threshold: "10" # 当排队请求超过10个时触发扩容
+      metricName: vllm_requests_waiting
+      query: sum(vllm:num_requests_waiting{namespace="default",service="qwen-service"})
+      threshold: "10" # Scale when the reported vLLM queue depth exceeds this value.

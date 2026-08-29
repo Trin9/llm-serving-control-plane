@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"sync"
 
-	"gate-service/app/monitor"
-
 	"github.com/gin-gonic/gin"
 	"golang.org/x/time/rate"
 )
@@ -27,10 +25,6 @@ func RateLimitMiddleware() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "Too many requests"})
 			return
 		}
-
-		// Simulate vLLM requests waiting/in-flight metric for KEDA scaling
-		monitor.VllmRequestsWaiting.Inc()
-		defer monitor.VllmRequestsWaiting.Dec()
 
 		c.Next()
 	}
