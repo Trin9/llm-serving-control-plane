@@ -47,18 +47,29 @@ func main() {
 
 	// 1. 初始化语义路由 (W13)
 	// 生产环境下优先使用 Kubernetes Endpoints 自动发现后端；本地开发仍支持 VLLM_URLS 静态配置。
-	var backendSource handler.BackendSource = handler.NewStaticBackendSourceFromEnv("VLLM_URLS", []string{"http://localhost:8000/v1/chat/completions"})
+	staticSource := handler.NewStaticBackendSourceFromEnv("VLLM_URLS", []string{"http://localhost:8000/v1/chat/completions"})
+	var backendSource handler.BackendSource = staticSource
+	usingKubernetesDiscovery := false
 	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" || os.Getenv("USE_KUBERNETES_BACKEND_DISCOVERY") == "true" {
 		if k8sSource, err := handler.NewKubernetesBackendSourceFromEnv(); err == nil {
 			backendSource = k8sSource
+			usingKubernetesDiscovery = true
 		}
 	}
-	backendList, err := backendSource.Discover()
-	if err != nil || len(backendList) == 0 {
-		backendList = []string{"http://localhost:8000/v1/chat/completions"}
-		backendSource = handler.NewStaticBackendSource(backendList)
+	backendList := []string{}
+	if !usingKubernetesDiscovery {
+		var err error
+		backendList, err = staticSource.Discover()
+		if err != nil || len(backendList) == 0 {
+			backendList = []string{"http://localhost:8000/v1/chat/completions"}
+		}
 	}
 	routerSvc := handler.NewModelConsistentHashRouter(backendList)
+	if modelSource, ok := backendSource.(handler.ModelBackendSource); ok {
+		if modelBackends, err := modelSource.DiscoverByModel(); err == nil {
+			routerSvc.UpdateModelBackends(modelBackends)
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	handler.StartBackendRefresh(ctx, backendSource, routerSvc, 30*time.Second)

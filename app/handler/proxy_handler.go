@@ -156,6 +156,16 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 		projectIDStr, _ := projectID.(string)
 
 		bodyBytes, _ := io.ReadAll(c.Request.Body)
+		if validator, ok := router.(ModelRouteValidator); ok {
+			if err := validator.ValidateModelRoute(bodyBytes); err != nil {
+				if strings.Contains(err.Error(), "required") {
+					c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				} else {
+					c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+				}
+				return
+			}
+		}
 
 		// 1. Route selection based on request content
 		targetURL := router.Route(bodyBytes)

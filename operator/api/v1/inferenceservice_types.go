@@ -27,6 +27,8 @@ import (
 type InferenceServiceSpec struct {
 	// ModelName is the name of the model to serve (e.g., "Qwen/Qwen2.5-7B-Instruct")
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Immutable
 	ModelName string `json:"modelName"`
 
 	// Replicas is the number of desired pods running the model

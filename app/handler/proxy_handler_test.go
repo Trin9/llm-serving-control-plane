@@ -130,6 +130,30 @@ func TestProxyHandlerFactory_UpstreamNon200Response(t *testing.T) {
 	mockBilling.AssertNotCalled(t, "ReportUsage", mock.Anything)
 }
 
+func TestProxyHandlerFactory_RejectsMissingAndUnknownModels(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	billingService := new(MockBillingService)
+	modelRouter := NewModelConsistentHashRouter([]string{"http://default:8000/v1/chat/completions"})
+	modelRouter.RegisterModelBackends("model-a", []string{"http://model-a:8000/v1/chat/completions"})
+
+	router := gin.New()
+	router.POST("/v1/chat/completions", ProxyHandlerFactory(billingService, modelRouter))
+
+	for _, testCase := range []struct {
+		body       string
+		statusCode int
+	}{
+		{body: `{"messages":[{"role":"user","content":"hello"}]}`, statusCode: http.StatusBadRequest},
+		{body: `{"model":"model-b","messages":[{"role":"user","content":"hello"}]}`, statusCode: http.StatusNotFound},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(testCase.body))
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		assert.Equal(t, testCase.statusCode, recorder.Code)
+	}
+}
+
 // TestProxyHandlerFactory_ClientDisconnect tests handling of client disconnection before upstream responds.
 func TestProxyHandlerFactory_ClientDisconnect(t *testing.T) {
 	gin.SetMode(gin.TestMode)

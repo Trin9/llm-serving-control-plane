@@ -82,7 +82,11 @@ spec:
                 type: string
               modelName:
                 description: ModelName is the name of the model to serve (e.g., "Qwen/Qwen2.5-7B-Instruct")
+                minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: modelName is immutable after creation
+                  rule: self == oldSelf
               replicas:
                 default: 1
                 description: Replicas is the number of desired pods running the model

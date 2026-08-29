@@ -17,6 +17,12 @@ type Router interface {
 	UpdateBackends(urls []string)
 }
 
+// ModelRouteValidator reports model-aware routing errors before proxying.
+// Static routers intentionally do not implement this interface.
+type ModelRouteValidator interface {
+	ValidateModelRoute(reqBody []byte) error
+}
+
 // ConsistentHashRouter 实现了一致性哈希路由策略 (W13)
 type ConsistentHashRouter struct {
 	mu       sync.RWMutex
@@ -30,9 +36,10 @@ type ConsistentHashRouter struct {
 // 这使得不同模型不会共享同一条全局后端哈希环，保证路由边界清晰，也允许在未来
 // 为每个 model 绑定不同的 backend pool。
 type ModelConsistentHashRouter struct {
-	mu           sync.RWMutex
-	defaultRouter *ConsistentHashRouter
-	modelRouters map[string]*ConsistentHashRouter
+	mu                     sync.RWMutex
+	defaultRouter          *ConsistentHashRouter
+	modelRouters           map[string]*ConsistentHashRouter
+	modelRoutingEnabled    bool
 }
 
 func NewConsistentHashRouter(urls []string) *ConsistentHashRouter {
@@ -77,9 +84,15 @@ func (r *ModelConsistentHashRouter) RegisterModelBackends(model string, urls []s
 		return
 	}
 	r.modelRouters[model] = pool
+	r.modelRoutingEnabled = true
 }
 
 func (r *ModelConsistentHashRouter) UpdateModelBackends(modelBackends map[string][]string) {
+	normalizedBackends := make(map[string][]string, len(modelBackends))
+	for model, urls := range modelBackends {
+		normalizedBackends[normalizeModelKey(model)] = normalizeURLs(urls)
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -87,9 +100,8 @@ func (r *ModelConsistentHashRouter) UpdateModelBackends(modelBackends map[string
 		r.modelRouters = make(map[string]*ConsistentHashRouter)
 	}
 
-	for model, urls := range modelBackends {
-		model = normalizeModelKey(model)
-		if model == "" {
+	for model, urls := range normalizedBackends {
+		if model == "" || model == "default" {
 			if r.defaultRouter == nil {
 				r.defaultRouter = NewConsistentHashRouter([]string{})
 			}
@@ -97,16 +109,12 @@ func (r *ModelConsistentHashRouter) UpdateModelBackends(modelBackends map[string
 			continue
 		}
 		r.modelRouters[model] = NewConsistentHashRouter(normalizeURLs(urls))
+		r.modelRoutingEnabled = true
 	}
 
 	for model := range r.modelRouters {
-		if _, ok := modelBackends[model]; !ok {
+		if _, ok := normalizedBackends[model]; !ok {
 			delete(r.modelRouters, model)
-		}
-	}
-	if r.defaultRouter != nil {
-		if defaultURLs, ok := modelBackends["default"]; ok {
-			r.defaultRouter.UpdateBackends(defaultURLs)
 		}
 	}
 }
@@ -133,10 +141,33 @@ func (r *ModelConsistentHashRouter) Route(reqBody []byte) string {
 			return pool.Route(reqBody)
 		}
 	}
+	if r.modelRoutingEnabled {
+		return ""
+	}
 	if r.defaultRouter == nil {
 		return ""
 	}
 	return r.defaultRouter.Route(reqBody)
+}
+
+// ValidateModelRoute enforces model isolation after dynamic model discovery is active.
+// A default-only static configuration remains backward compatible.
+func (r *ModelConsistentHashRouter) ValidateModelRoute(reqBody []byte) error {
+	model := extractModelName(reqBody)
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if !r.modelRoutingEnabled {
+		return nil
+	}
+	if model == "" {
+		return fmt.Errorf("model is required when model-aware routing is enabled")
+	}
+	if pool, ok := r.modelRouters[model]; !ok || pool == nil || len(pool.backends) == 0 {
+		return fmt.Errorf("model %q is not registered", model)
+	}
+	return nil
 }
 
 func extractModelName(reqBody []byte) string {

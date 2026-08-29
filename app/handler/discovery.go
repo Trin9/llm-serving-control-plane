@@ -37,6 +37,7 @@ type StaticBackendSource struct {
 type KubernetesBackendSource struct {
 	namespace string
 	port      int32
+	path      string
 	baseURL   string
 	tokenPath string
 	caFile    string
@@ -123,6 +124,7 @@ func NewKubernetesBackendSource(namespace string, baseURL string, port int32) *K
 	return &KubernetesBackendSource{
 		namespace: namespace,
 		port:      port,
+		path:      "/v1/chat/completions",
 		baseURL:   strings.TrimRight(baseURL, "/"),
 		tokenPath: "/var/run/secrets/kubernetes.io/serviceaccount/token",
 		caFile:    caFile,
@@ -218,7 +220,7 @@ func (s *KubernetesBackendSource) DiscoverByModel() (map[string][]string, error)
 		if name == "" {
 			continue
 		}
-		urls := extractURLList(item.Subsets, s.port)
+		urls := extractURLList(s, item.Subsets, s.port)
 		if len(urls) == 0 {
 			continue
 		}
@@ -236,13 +238,6 @@ func (s *KubernetesBackendSource) DiscoverByModel() (map[string][]string, error)
 			continue
 		}
 		result[modelName] = normalizeURLs(urls)
-	}
-
-	if len(result) == 0 {
-		flat, err := s.Discover()
-		if err == nil && len(flat) > 0 {
-			result["default"] = flat
-		}
 	}
 
 	return result, nil
@@ -277,7 +272,7 @@ func (s *KubernetesBackendSource) Discover() ([]string, error) {
 				if strings.TrimSpace(addr.IP) == "" {
 					continue
 				}
-				url := fmt.Sprintf("http://%s:%d", addr.IP, detectPort(subset, s.port))
+				url := s.backendURL(addr.IP, detectPort(subset, s.port))
 				if _, exists := seen[url]; exists {
 					continue
 				}
@@ -340,7 +335,7 @@ func detectPort(subset k8sEndpointSubset, defaultPort int32) int32 {
 	return defaultPort
 }
 
-func extractURLList(subsets []k8sEndpointSubset, defaultPort int32) []string {
+func extractURLList(source *KubernetesBackendSource, subsets []k8sEndpointSubset, defaultPort int32) []string {
 	urls := make([]string, 0)
 	seen := make(map[string]struct{})
 	for _, subset := range subsets {
@@ -349,7 +344,7 @@ func extractURLList(subsets []k8sEndpointSubset, defaultPort int32) []string {
 			if strings.TrimSpace(addr.IP) == "" {
 				continue
 			}
-			url := fmt.Sprintf("http://%s:%d", addr.IP, port)
+			url := source.backendURL(addr.IP, port)
 			if _, exists := seen[url]; exists {
 				continue
 			}
@@ -358,6 +353,14 @@ func extractURLList(subsets []k8sEndpointSubset, defaultPort int32) []string {
 		}
 	}
 	return urls
+}
+
+func (s *KubernetesBackendSource) backendURL(ip string, port int32) string {
+	path := s.path
+	if path == "" {
+		path = "/v1/chat/completions"
+	}
+	return fmt.Sprintf("http://%s:%d%s", ip, port, path)
 }
 
 func normalizeURLs(urls []string) []string {
@@ -429,24 +432,7 @@ func StartBackendRefresh(ctx context.Context, source BackendSource, router Route
 
 	go func() {
 		for {
-			if modelSource, ok := source.(ModelBackendSource); ok {
-				if modelRouter, ok := router.(*ModelConsistentHashRouter); ok {
-					if modelBackends, err := modelSource.DiscoverByModel(); err == nil && len(modelBackends) > 0 {
-						modelRouter.UpdateModelBackends(modelBackends)
-						select {
-						case <-ctx.Done():
-							return
-						case <-time.After(interval):
-						}
-						continue
-					}
-				}
-			}
-
-			urls, err := source.Discover()
-			if err == nil {
-				router.UpdateBackends(urls)
-			}
+			refreshBackends(source, router)
 
 			select {
 			case <-ctx.Done():
@@ -455,4 +441,19 @@ func StartBackendRefresh(ctx context.Context, source BackendSource, router Route
 			}
 		}
 	}()
+}
+
+func refreshBackends(source BackendSource, router Router) {
+	if modelSource, ok := source.(ModelBackendSource); ok {
+		if modelRouter, ok := router.(*ModelConsistentHashRouter); ok {
+			if modelBackends, err := modelSource.DiscoverByModel(); err == nil {
+				modelRouter.UpdateModelBackends(modelBackends)
+			}
+			return
+		}
+	}
+
+	if urls, err := source.Discover(); err == nil {
+		router.UpdateBackends(urls)
+	}
 }
