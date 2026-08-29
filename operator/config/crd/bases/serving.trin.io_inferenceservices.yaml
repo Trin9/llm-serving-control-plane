@@ -107,7 +107,7 @@ spec:
               conditions:
                 description: |-
                   Conditions represent the current state of the InferenceService
-                  Standard condition types: Available, Progressing, Degraded
+                  Standard condition types: Available, Ready, Progressing, Degraded, Unknown
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

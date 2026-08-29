@@ -68,7 +68,7 @@ type InferenceServiceStatus struct {
 	URL string `json:"url,omitempty"`
 
 	// Conditions represent the current state of the InferenceService
-	// Standard condition types: Available, Progressing, Degraded
+	// Standard condition types: Available, Ready, Progressing, Degraded, Unknown
 	// +listType=map
 	// +listMapKey=type
 	// +optional

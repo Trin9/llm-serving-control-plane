@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -27,14 +29,16 @@ const finalizerName = "serving.trin.io/finalizer"
 // InferenceServiceReconciler reconciles a InferenceService object
 type InferenceServiceReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=serving.trin.io,resources=inferenceservices,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=serving.trin.io,resources=inferenceservices/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=serving.trin.io,resources=inferenceservices/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services;pods,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *InferenceServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -84,9 +88,15 @@ func (r *InferenceServiceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// 3. 同步 Deployment
 	if err := r.reconcileDeployment(ctx, &inferSvc); err != nil {
 		logger.Error(err, "Failed to reconcile Deployment")
-		_ = r.updateStatusCondition(ctx, &inferSvc, "Available", metav1.ConditionFalse, "DeploymentFailed", err.Error())
-		_ = r.updateStatusCondition(ctx, &inferSvc, "Progressing", metav1.ConditionFalse, "DeploymentFailed", err.Error())
-		_ = r.updateStatusCondition(ctx, &inferSvc, "Degraded", metav1.ConditionTrue, "DeploymentFailed", err.Error())
+		_ = r.updateLifecycleStatus(ctx, &inferSvc, lifecycleState{
+			available:   metav1.ConditionFalse,
+			ready:       metav1.ConditionFalse,
+			progressing: metav1.ConditionFalse,
+			degraded:    metav1.ConditionTrue,
+			unknown:     metav1.ConditionFalse,
+			reason:      "DeploymentFailed",
+			message:     err.Error(),
+		})
 		return ctrl.Result{}, err
 	}
 
@@ -130,19 +140,18 @@ func (r *InferenceServiceReconciler) reconcileDeployment(ctx context.Context, in
 		return err
 	}
 
-	// 已存在，更新 Deployment（只更新我们关心的字段）
-	existing.Spec.Replicas = deployment.Spec.Replicas
-
-	// 更新容器配置（确保容器存在）
-	if len(existing.Spec.Template.Spec.Containers) > 0 {
-		desiredContainer := deployment.Spec.Template.Spec.Containers[0]
-		existing.Spec.Template.Spec.Containers[0].Image = desiredContainer.Image
-		existing.Spec.Template.Spec.Containers[0].Args = desiredContainer.Args
-		existing.Spec.Template.Spec.Containers[0].Name = desiredContainer.Name
-	} else {
-		// 如果容器不存在，替换整个容器列表
-		existing.Spec.Template.Spec.Containers = deployment.Spec.Template.Spec.Containers
+	changed := !reflect.DeepEqual(existing.Labels, deployment.Labels) ||
+		!reflect.DeepEqual(existing.Spec.Replicas, deployment.Spec.Replicas) ||
+		!reflect.DeepEqual(existing.Spec.Template.Labels, deployment.Spec.Template.Labels) ||
+		!reflect.DeepEqual(existing.Spec.Template.Spec.Containers, deployment.Spec.Template.Spec.Containers)
+	if !changed {
+		return nil
 	}
+
+	existing.Labels = deployment.Labels
+	existing.Spec.Replicas = deployment.Spec.Replicas
+	existing.Spec.Template.Labels = deployment.Spec.Template.Labels
+	existing.Spec.Template.Spec.Containers = deployment.Spec.Template.Spec.Containers
 
 	logger.Info("Updating Deployment", "name", deployment.Name)
 	return r.Update(ctx, &existing)
@@ -304,9 +313,18 @@ func (r *InferenceServiceReconciler) reconcileService(ctx context.Context, infer
 		return err
 	}
 
-	// Service 一般不需要频繁更新，这里只记录日志
-	logger.Info("Service already exists", "name", service.Name)
-	return nil
+	changed := !reflect.DeepEqual(existing.Labels, service.Labels) ||
+		!reflect.DeepEqual(existing.Spec.Selector, service.Spec.Selector) ||
+		!reflect.DeepEqual(existing.Spec.Ports, service.Spec.Ports)
+	if !changed {
+		return nil
+	}
+
+	existing.Labels = service.Labels
+	existing.Spec.Selector = service.Spec.Selector
+	existing.Spec.Ports = service.Spec.Ports
+	logger.Info("Updating Service", "name", service.Name)
+	return r.Update(ctx, &existing)
 }
 
 // buildService 根据 InferenceService 构建 Service 对象
@@ -392,14 +410,25 @@ func (r *InferenceServiceReconciler) updateStatus(ctx context.Context, inferSvc 
 
 	if err != nil {
 		if errors.IsNotFound(err) {
-			if err := r.updateStatusCondition(ctx, inferSvc, "Available", metav1.ConditionFalse, "DeploymentNotFound", "Waiting for deployment to be created"); err != nil {
-				return err
-			}
-			if err := r.updateStatusCondition(ctx, inferSvc, "Progressing", metav1.ConditionTrue, "DeploymentNotFound", "Waiting for deployment to be created"); err != nil {
-				return err
-			}
-			return r.updateStatusCondition(ctx, inferSvc, "Degraded", metav1.ConditionTrue, "DeploymentNotFound", "Waiting for deployment to be created")
+			return r.updateLifecycleStatus(ctx, inferSvc, lifecycleState{
+				available:   metav1.ConditionFalse,
+				ready:       metav1.ConditionFalse,
+				progressing: metav1.ConditionTrue,
+				degraded:    metav1.ConditionFalse,
+				unknown:     metav1.ConditionFalse,
+				reason:      "DeploymentNotFound",
+				message:     "Waiting for deployment to be created",
+			})
 		}
+		_ = r.updateLifecycleStatus(ctx, inferSvc, lifecycleState{
+			available:   metav1.ConditionUnknown,
+			ready:       metav1.ConditionUnknown,
+			progressing: metav1.ConditionUnknown,
+			degraded:    metav1.ConditionUnknown,
+			unknown:     metav1.ConditionTrue,
+			reason:      "DeploymentInspectionFailed",
+			message:     err.Error(),
+		})
 		return err
 	}
 
@@ -415,41 +444,148 @@ func (r *InferenceServiceReconciler) updateStatus(ctx context.Context, inferSvc 
 
 	inferSvc.Status.Replicas = deployment.Status.ReadyReplicas
 
-	if deployment.Status.ReadyReplicas == replicas {
-		if err := r.updateStatusCondition(ctx, inferSvc, "Available", metav1.ConditionTrue, "DeploymentReady", "Inference service is ready"); err != nil {
-			return err
-		}
-		if err := r.updateStatusCondition(ctx, inferSvc, "Progressing", metav1.ConditionFalse, "DeploymentReady", "Inference service is ready"); err != nil {
-			return err
-		}
-		return r.updateStatusCondition(ctx, inferSvc, "Degraded", metav1.ConditionFalse, "DeploymentReady", "Inference service is ready")
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.InNamespace(inferSvc.Namespace), client.MatchingLabels{
+		"serving.trin.io/inferenceservice": inferSvc.Name,
+	}); err != nil {
+		_ = r.updateLifecycleStatus(ctx, inferSvc, lifecycleState{
+			available:   metav1.ConditionUnknown,
+			ready:       metav1.ConditionUnknown,
+			progressing: metav1.ConditionUnknown,
+			degraded:    metav1.ConditionUnknown,
+			unknown:     metav1.ConditionTrue,
+			reason:      "PodInspectionFailed",
+			message:     err.Error(),
+		})
+		return err
 	}
 
-	msg := fmt.Sprintf("Deployment is progressing (%d/%d ready)", deployment.Status.ReadyReplicas, replicas)
-	if err := r.updateStatusCondition(ctx, inferSvc, "Available", metav1.ConditionFalse, "DeploymentProgressing", msg); err != nil {
-		return err
-	}
-	if err := r.updateStatusCondition(ctx, inferSvc, "Progressing", metav1.ConditionTrue, "DeploymentProgressing", msg); err != nil {
-		return err
-	}
-	return r.updateStatusCondition(ctx, inferSvc, "Degraded", metav1.ConditionFalse, "DeploymentProgressing", msg)
+	return r.updateLifecycleStatus(ctx, inferSvc, evaluateLifecycle(&deployment, pods.Items, replicas))
 }
 
-// 辅助函数：更新 Condition 并提交
-func (r *InferenceServiceReconciler) updateStatusCondition(ctx context.Context, inferSvc *servingv1.InferenceService, conditionType string, status metav1.ConditionStatus, reason, message string) error {
-	meta.SetStatusCondition(&inferSvc.Status.Conditions, metav1.Condition{
+type lifecycleState struct {
+	available   metav1.ConditionStatus
+	ready       metav1.ConditionStatus
+	progressing metav1.ConditionStatus
+	degraded    metav1.ConditionStatus
+	unknown     metav1.ConditionStatus
+	reason      string
+	message     string
+}
+
+func evaluateLifecycle(deployment *appsv1.Deployment, pods []corev1.Pod, replicas int32) lifecycleState {
+	available := metav1.ConditionFalse
+	if deployment.Status.AvailableReplicas > 0 {
+		available = metav1.ConditionTrue
+	}
+
+	for _, pod := range pods {
+		for _, condition := range pod.Status.Conditions {
+			if condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionFalse && condition.Reason == corev1.PodReasonUnschedulable {
+				return degradedLifecycle(available, "Unschedulable", condition.Message)
+			}
+		}
+		for _, status := range append(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses...) {
+			if status.State.Waiting != nil {
+				switch status.State.Waiting.Reason {
+				case "ImagePullBackOff", "ErrImagePull":
+					return degradedLifecycle(available, "ImagePullFailed", status.State.Waiting.Message)
+				case "CrashLoopBackOff":
+					return degradedLifecycle(available, "CrashLoopBackOff", status.State.Waiting.Message)
+				}
+			}
+		}
+		if pod.Status.Phase == corev1.PodFailed {
+			return degradedLifecycle(available, "PodFailed", pod.Status.Message)
+		}
+	}
+
+	if replicas == 0 {
+		return lifecycleState{
+			available:   metav1.ConditionFalse,
+			ready:       metav1.ConditionFalse,
+			progressing: metav1.ConditionFalse,
+			degraded:    metav1.ConditionFalse,
+			unknown:     metav1.ConditionFalse,
+			reason:      "ScaledToZero",
+			message:     "Inference service is scaled to zero replicas",
+		}
+	}
+
+	if deployment.Status.ReadyReplicas >= replicas {
+		return lifecycleState{
+			available:   available,
+			ready:       metav1.ConditionTrue,
+			progressing: metav1.ConditionFalse,
+			degraded:    metav1.ConditionFalse,
+			unknown:     metav1.ConditionFalse,
+			reason:      "DeploymentReady",
+			message:     "Inference service is ready",
+		}
+	}
+
+	return lifecycleState{
+		available:   available,
+		ready:       metav1.ConditionFalse,
+		progressing: metav1.ConditionTrue,
+		degraded:    metav1.ConditionFalse,
+		unknown:     metav1.ConditionFalse,
+		reason:      "DeploymentProgressing",
+		message:     fmt.Sprintf("Deployment is progressing (%d/%d ready)", deployment.Status.ReadyReplicas, replicas),
+	}
+}
+
+func degradedLifecycle(available metav1.ConditionStatus, reason, message string) lifecycleState {
+	if message == "" {
+		message = reason
+	}
+	return lifecycleState{
+		available:   available,
+		ready:       metav1.ConditionFalse,
+		progressing: metav1.ConditionFalse,
+		degraded:    metav1.ConditionTrue,
+		unknown:     metav1.ConditionFalse,
+		reason:      reason,
+		message:     message,
+	}
+}
+
+func (r *InferenceServiceReconciler) updateLifecycleStatus(ctx context.Context, inferSvc *servingv1.InferenceService, state lifecycleState) error {
+	previousAvailable := meta.FindStatusCondition(inferSvc.Status.Conditions, "Available")
+	previousReady := meta.FindStatusCondition(inferSvc.Status.Conditions, "Ready")
+	meta.SetStatusCondition(&inferSvc.Status.Conditions, lifecycleCondition(inferSvc, "Available", state.available, state.reason, state.message))
+	meta.SetStatusCondition(&inferSvc.Status.Conditions, lifecycleCondition(inferSvc, "Ready", state.ready, state.reason, state.message))
+	meta.SetStatusCondition(&inferSvc.Status.Conditions, lifecycleCondition(inferSvc, "Progressing", state.progressing, state.reason, state.message))
+	meta.SetStatusCondition(&inferSvc.Status.Conditions, lifecycleCondition(inferSvc, "Degraded", state.degraded, state.reason, state.message))
+	meta.SetStatusCondition(&inferSvc.Status.Conditions, lifecycleCondition(inferSvc, "Unknown", state.unknown, state.reason, state.message))
+
+	if err := r.Status().Update(ctx, inferSvc); err != nil {
+		return err
+	}
+	if r.Recorder != nil && (previousAvailable == nil || previousAvailable.Status != state.available || previousReady == nil || previousReady.Status != state.ready || previousReady.Reason != state.reason) {
+		eventType := corev1.EventTypeNormal
+		if state.degraded == metav1.ConditionTrue || state.unknown == metav1.ConditionTrue {
+			eventType = corev1.EventTypeWarning
+		}
+		r.Recorder.Eventf(inferSvc, eventType, state.reason, "%s", state.message)
+	}
+	return nil
+}
+
+func lifecycleCondition(inferSvc *servingv1.InferenceService, conditionType string, status metav1.ConditionStatus, reason, message string) metav1.Condition {
+	return metav1.Condition{
 		Type:               conditionType,
 		Status:             status,
+		ObservedGeneration: inferSvc.Generation,
 		Reason:             reason,
 		Message:            message,
 		LastTransitionTime: metav1.Now(),
-	})
-
-	return r.Status().Update(ctx, inferSvc)
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *InferenceServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("inferenceservice-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&servingv1.InferenceService{}).
 		Owns(&appsv1.Deployment{}). // 监听 Deployment 变化
