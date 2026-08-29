@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log"
@@ -68,12 +69,12 @@ type RedisBillingService struct {
 // NewRedisBillingService creates a Redis-based billing service
 // redisAddr: Redis connection address (e.g., "localhost:6379")
 // failOpen: If true, allow traffic when Redis is unavailable (fail-open mode)
-func NewRedisBillingService(redisAddr string, failOpen bool) *RedisBillingService {
+func NewRedisBillingService(redisAddr, redisPassword string, failOpen bool) *RedisBillingService {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	client := redis.NewClient(&redis.Options{
 		Addr:         redisAddr,
-		Password:     "", // No password by default
+		Password:     redisPassword,
 		DB:           0,  // Use default DB
 		DialTimeout:  5 * time.Second,
 		ReadTimeout:  3 * time.Second,
@@ -86,6 +87,15 @@ func NewRedisBillingService(redisAddr string, failOpen bool) *RedisBillingServic
 		cancel:   cancel,
 		failOpen: failOpen,
 	}
+}
+
+func apiKeyFingerprint(apiKey string) string {
+	digest := sha256.Sum256([]byte(apiKey))
+	return fmt.Sprintf("%x", digest[:])
+}
+
+func apiKeyRedisKey(apiKey string) string {
+	return "apikey:v1:" + apiKeyFingerprint(apiKey)
 }
 
 // Start initializes the Redis connection
@@ -113,21 +123,12 @@ func (s *RedisBillingService) Stop() {
 
 // AuthenticateAPIKey validates an API key and returns metadata
 func (s *RedisBillingService) AuthenticateAPIKey(apiKey string) (*APIKeyInfo, error) {
-	key := fmt.Sprintf("apikey:%s", apiKey)
+	key := apiKeyRedisKey(apiKey)
 
 	result, err := s.client.HGetAll(s.ctx, key).Result()
 	if err != nil {
-		if s.failOpen {
-			log.Printf("⚠️ [BILLING] Redis error during auth, fail-open mode: %v", err)
-			// In fail-open mode, allow the request with placeholder values
-			return &APIKeyInfo{
-				APIKey:    apiKey,
-				OrgID:     "unknown",
-				ProjectID: "unknown",
-				Status:    "active",
-			}, nil
-		}
-		return nil, fmt.Errorf("redis error: %w", err)
+		// Authentication must always fail closed: a missing Redis response cannot prove identity.
+		return nil, ErrRedisUnavailable
 	}
 
 	if len(result) == 0 {
@@ -135,7 +136,7 @@ func (s *RedisBillingService) AuthenticateAPIKey(apiKey string) (*APIKeyInfo, er
 	}
 
 	info := &APIKeyInfo{
-		APIKey:    apiKey,
+		Fingerprint: apiKeyFingerprint(apiKey),
 		OrgID:     result["org_id"],
 		ProjectID: result["project_id"],
 		Status:    result["status"],
@@ -252,7 +253,7 @@ func (s *RedisBillingService) ReportUsage(record UsageRecord) error {
 
 // CreateAPIKey creates a new API key in Redis with metadata
 func (s *RedisBillingService) CreateAPIKey(apiKey, orgID, projectID, name string) error {
-	key := fmt.Sprintf("apikey:%s", apiKey)
+	key := apiKeyRedisKey(apiKey)
 
 	err := s.client.HSet(s.ctx, key, map[string]interface{}{
 		"org_id":     orgID,
@@ -266,7 +267,7 @@ func (s *RedisBillingService) CreateAPIKey(apiKey, orgID, projectID, name string
 		return fmt.Errorf("failed to create API key: %w", err)
 	}
 
-	log.Printf("✅ [BILLING] Created API key: %s (org=%s, project=%s)", apiKey, orgID, projectID)
+	log.Printf("[BILLING] Created API key fingerprint=%s (org=%s, project=%s)", apiKeyFingerprint(apiKey)[:12], orgID, projectID)
 	return nil
 }
 

@@ -17,7 +17,7 @@ type UsageRecord struct {
 
 // APIKeyInfo contains metadata for an authenticated API key
 type APIKeyInfo struct {
-	APIKey    string    `json:"api_key"`
+	Fingerprint string    `json:"fingerprint"`
 	OrgID     string    `json:"org_id"`
 	ProjectID string    `json:"project_id"`
 	Status    string    `json:"status"` // "active", "suspended", "revoked"

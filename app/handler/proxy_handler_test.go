@@ -130,6 +130,32 @@ func TestProxyHandlerFactory_UpstreamNon200Response(t *testing.T) {
 	mockBilling.AssertNotCalled(t, "ReportUsage", mock.Anything)
 }
 
+func TestProxyHandlerFactory_UsesConfiguredUpstreamAPIKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("VLLM_API_KEY", "upstream-secret")
+
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer upstream-secret", r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer upstreamServer.Close()
+
+	billingService := new(MockBillingService)
+	billingService.On("ReportUsage", mock.Anything).Return(nil).Maybe()
+	routerService := new(MockRouter)
+	routerService.On("Route", mock.Anything).Return(upstreamServer.URL)
+
+	router := gin.New()
+	router.POST("/v1/chat/completions", ProxyHandlerFactory(billingService, routerService))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"test-model"}`))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+}
+
 func TestProxyHandlerFactory_RejectsMissingAndUnknownModels(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

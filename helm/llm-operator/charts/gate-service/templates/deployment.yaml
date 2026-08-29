@@ -27,6 +27,11 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+          {{- with .Values.env.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ . }}
+          {{- end }}
           env:
             - name: KUBE_NAMESPACE
               valueFrom:

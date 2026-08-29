@@ -7,6 +7,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func setupTestRedis(t *testing.T) (*RedisBillingService, *miniredis.Miniredis) {
@@ -46,9 +47,21 @@ func TestRedisBillingService_AuthenticateAPIKey(t *testing.T) {
 	assert.Equal(t, ErrAPIKeyNotFound, err)
 
 	// 3. Test inactive
-	mr.HSet("apikey:"+apiKey, "status", "suspended")
+	mr.HSet(apiKeyRedisKey(apiKey), "status", "suspended")
 	_, err = svc.AuthenticateAPIKey(apiKey)
 	assert.Equal(t, ErrAPIKeyInactive, err)
+}
+
+func TestRedisBillingService_StoresOnlyAPIKeyFingerprint(t *testing.T) {
+	svc, mr := setupTestRedis(t)
+	defer mr.Close()
+
+	apiKey := "sk-sensitive-key"
+	require.NoError(t, svc.CreateAPIKey(apiKey, "org-1", "proj-1", "Test Key"))
+
+	assert.True(t, mr.Exists(apiKeyRedisKey(apiKey)))
+	assert.False(t, mr.Exists("apikey:"+apiKey))
+	assert.NotContains(t, apiKeyRedisKey(apiKey), apiKey)
 }
 
 func TestRedisBillingService_CheckQuota(t *testing.T) {

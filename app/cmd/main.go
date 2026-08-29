@@ -32,11 +32,12 @@ func main() {
 	// Supports Redis for production and memory for local development
 	var billingSvc billing.BillingService
 	redisAddr := os.Getenv("REDIS_ADDR")
+	redisPassword := os.Getenv("REDIS_PASSWORD")
 	failOpen := boolFromEnv("BILLING_FAIL_OPEN", false)
 
 	if redisAddr != "" {
 		// Use Redis-based billing for multi-tenant quota enforcement
-		billingSvc = billing.NewRedisBillingService(redisAddr, failOpen)
+		billingSvc = billing.NewRedisBillingService(redisAddr, redisPassword, failOpen)
 	} else {
 		// Fallback to memory-based billing
 		billingSvc = billing.NewMemoryBillingService(1000)

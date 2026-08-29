@@ -88,6 +88,9 @@ gate-service:
     pullPolicy: IfNotPresent
     
   env:
+    # Existing Secret with JWT_SECRET, REDIS_PASSWORD, and VLLM_API_KEY.
+    # Keep this empty only for local/mock deployments that do not use JWT or upstream auth.
+    existingSecret: ""
     # 你可以在这里全局覆盖网关路由的后端地址
     VLLM_URLS: "http://mock-service.default.svc.cluster.local:8000/v1/chat/completions"
     REDIS_ADDR: "llm-operator-redis.default.svc.cluster.local:6379"

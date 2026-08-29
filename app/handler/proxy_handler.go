@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -197,8 +198,10 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 			return
 		}
 		proxyReq.Header.Set("Content-Type", "application/json")
-		proxyReq.Header.Set("Authorization", "Bearer your-vllm-api-key") // 如果 vLLM 设置了 key
-		proxyReq.Header.Set("X-Request-ID", requestID)                   // 将 Request ID 传递给上游
+		if upstreamAPIKey := strings.TrimSpace(os.Getenv("VLLM_API_KEY")); upstreamAPIKey != "" {
+			proxyReq.Header.Set("Authorization", "Bearer "+upstreamAPIKey)
+		}
+		proxyReq.Header.Set("X-Request-ID", requestID) // 将 Request ID 传递给上游
 
 		// C. 发送请求
 		client := &http.Client{

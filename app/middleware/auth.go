@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"gate-service/app/billing"
 	"log"
 	"net/http"
@@ -58,10 +59,14 @@ func AuthMiddleware(billingSvc billing.BillingService) gin.HandlerFunc {
 		claims := jwt.MapClaims{}
 		jwtSecret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
 		if jwtSecret == "" {
-			jwtSecret = "dev-only-secret-change-me"
-			log.Printf("⚠️ [AUTH] JWT_SECRET not set; using dev-only fallback for local testing")
+			log.Printf("[AUTH] JWT authentication is disabled because JWT_SECRET is not configured")
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token/API key"})
+			return
 		}
 		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected JWT signing method: %v", token.Header["alg"])
+			}
 			return []byte(jwtSecret), nil
 		})
 
