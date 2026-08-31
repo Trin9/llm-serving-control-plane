@@ -12,16 +12,24 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Lua script for atomic quota deduction with idempotency
-// This script ensures that:
+// Lua script for atomic quota deduction with idempotency and a durable usage ledger.
+// It ensures:
 // 1. A request is only billed once (idempotency via usage:req:{request_id})
 // 2. Quota deductions are atomic (no race conditions)
 // 3. Quotas can go negative (debt system) - blocking happens at pre-check level
+// 4. The full usage record is persisted as a ledger hash for audit/settlement/refund
 const luaDeductQuota = `
 local request_id = ARGV[1]
 local org_id = ARGV[2]
 local project_id = ARGV[3]
 local token_count = tonumber(ARGV[4])
+local trace_id = ARGV[5]
+local model = ARGV[6]
+local prompt_tokens = tonumber(ARGV[7])
+local completion_tokens = tonumber(ARGV[8])
+local usage_source = ARGV[9]
+local request_status = ARGV[10]
+local timestamp = ARGV[11]
 
 -- Check if this request was already processed (idempotency)
 local idempotency_key = "usage:req:" .. request_id
@@ -38,6 +46,24 @@ redis.call("DECRBY", project_quota_key, token_count)
 
 -- Mark request as processed with 24-hour TTL
 redis.call("SET", idempotency_key, "processed", "EX", 86400)
+
+-- Persist the durable usage ledger entry
+local ledger_key = "usage:ledger:" .. request_id
+redis.call("HSET", ledger_key,
+	"request_id", request_id,
+	"trace_id", trace_id,
+	"model", model,
+	"org_id", org_id,
+	"project_id", project_id,
+	"prompt_tokens", prompt_tokens,
+	"completion_tokens", completion_tokens,
+	"total_tokens", token_count,
+	"usage_source", usage_source,
+	"request_status", request_status,
+	"state", "billed",
+	"timestamp", timestamp
+)
+redis.call("EXPIRE", ledger_key, 86400)
 
 return {1, "success"}
 `
@@ -75,7 +101,7 @@ func NewRedisBillingService(redisAddr, redisPassword string, failOpen bool) *Red
 	client := redis.NewClient(&redis.Options{
 		Addr:         redisAddr,
 		Password:     redisPassword,
-		DB:           0,  // Use default DB
+		DB:           0, // Use default DB
 		DialTimeout:  5 * time.Second,
 		ReadTimeout:  3 * time.Second,
 		WriteTimeout: 3 * time.Second,
@@ -137,10 +163,10 @@ func (s *RedisBillingService) AuthenticateAPIKey(apiKey string) (*APIKeyInfo, er
 
 	info := &APIKeyInfo{
 		Fingerprint: apiKeyFingerprint(apiKey),
-		OrgID:     result["org_id"],
-		ProjectID: result["project_id"],
-		Status:    result["status"],
-		Name:      result["name"],
+		OrgID:       result["org_id"],
+		ProjectID:   result["project_id"],
+		Status:      result["status"],
+		Name:        result["name"],
 	}
 
 	// Parse created_at timestamp (stored as Unix timestamp string)
@@ -201,7 +227,7 @@ func (s *RedisBillingService) CheckQuota(orgID, projectID string, estimatedToken
 	return nil
 }
 
-// ReportUsage atomically deducts tokens using Lua script with idempotency
+// ReportUsage atomically deducts tokens using Lua script with idempotency and ledger persistence
 func (s *RedisBillingService) ReportUsage(record UsageRecord) error {
 	// Skip deduction if token count is 0 or negative
 	if record.TotalTokens <= 0 {
@@ -216,6 +242,13 @@ func (s *RedisBillingService) ReportUsage(record UsageRecord) error {
 		record.OrgID,
 		record.ProjectID,
 		record.TotalTokens,
+		record.TraceID,
+		record.Model,
+		record.PromptTokens,
+		record.CompletionTokens,
+		record.UsageSource,
+		record.RequestStatus,
+		record.Timestamp.Format(time.RFC3339),
 	).Result()
 
 	if err != nil {
@@ -239,8 +272,8 @@ func (s *RedisBillingService) ReportUsage(record UsageRecord) error {
 	case 1:
 		// Success - tokens deducted (quota may now be negative, which is allowed)
 		cost := float64(record.TotalTokens) * 0.000002 // $0.000002 per token
-		log.Printf("💰 [BILLING] Deducted: Request=%s, Org=%s, Project=%s, Model=%s, Tokens=%d, Cost=$%.6f",
-			record.RequestID, record.OrgID, record.ProjectID, record.Model, record.TotalTokens, cost)
+		log.Printf("💰 [BILLING] Deducted: Request=%s, Org=%s, Project=%s, Model=%s, Tokens=%d, Source=%s, Status=%s, Cost=$%.6f",
+			record.RequestID, record.OrgID, record.ProjectID, record.Model, record.TotalTokens, record.UsageSource, record.RequestStatus, cost)
 		return nil
 	case 0:
 		// Already processed (idempotency)
@@ -249,6 +282,51 @@ func (s *RedisBillingService) ReportUsage(record UsageRecord) error {
 	default:
 		return fmt.Errorf("unknown lua script result: code=%d, message=%s", code, message)
 	}
+}
+
+// GetUsageLedger retrieves the persisted ledger entry for a request, if present.
+func (s *RedisBillingService) GetUsageLedger(requestID string) (map[string]string, error) {
+	key := fmt.Sprintf("usage:ledger:%s", requestID)
+	return s.client.HGetAll(s.ctx, key).Result()
+}
+
+// RefundUsage reverses a billed request: it credits back the token cost and marks the
+// ledger entry as refunded. This is the settlement/compensation path for partial output,
+// upstream failure, or duplicate billing.
+func (s *RedisBillingService) RefundUsage(requestID string) error {
+	key := fmt.Sprintf("usage:ledger:%s", requestID)
+	ledger, err := s.client.HGetAll(s.ctx, key).Result()
+	if err != nil {
+		return err
+	}
+	if len(ledger) == 0 {
+		return fmt.Errorf("ledger entry not found for request %s", requestID)
+	}
+	if ledger["state"] == "refunded" {
+		return ErrAlreadyProcessed
+	}
+
+	tokens := 0
+	if v, ok := ledger["total_tokens"]; ok {
+		tokens, _ = strconv.Atoi(v)
+	}
+
+	orgQuotaKey := fmt.Sprintf("quota:org:%s", ledger["org_id"])
+	projectQuotaKey := fmt.Sprintf("quota:project:%s", ledger["project_id"])
+	if tokens > 0 {
+		if err := s.client.IncrBy(s.ctx, orgQuotaKey, int64(tokens)).Err(); err != nil {
+			return err
+		}
+		if err := s.client.IncrBy(s.ctx, projectQuotaKey, int64(tokens)).Err(); err != nil {
+			return err
+		}
+	}
+
+	if err := s.client.HSet(s.ctx, key, "state", "refunded").Err(); err != nil {
+		return err
+	}
+	log.Printf("🔁 [BILLING] Refunded request=%s tokens=%d", requestID, tokens)
+	return nil
 }
 
 // CreateAPIKey creates a new API key in Redis with metadata

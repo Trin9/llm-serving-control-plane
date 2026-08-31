@@ -309,10 +309,14 @@ func TestPhaseSSEDataAndReport_UsageDegradation(t *testing.T) {
 	// Final chunk with [DONE] and no usage (simulating a scenario where usage is never provided by upstream).
 	assert.False(t, PhaseSSEDataAndReport([]byte(`data: [DONE]`), stats))
 	assert.Equal(t, 2, stats.tokenCount) // Should still be 2 from manual counting.
+	assert.Equal(t, "estimated", stats.usageSource) // Chunk counting is an approximation.
 
 	// Now a chunk with usage, should override.
 	assert.False(t, PhaseSSEDataAndReport([]byte(`data: {"id":"1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":10,"total_tokens":15}}`), stats))
 	assert.Equal(t, 15, stats.tokenCount) // Should be overridden to 15.
+	assert.Equal(t, 5, stats.promptTokens)
+	assert.Equal(t, 10, stats.completionTokens)
+	assert.Equal(t, "official", stats.usageSource)
 }
 
 // TestProxyHandlerFactory_RequestIDPropagation tests Request ID generation and propagation.
@@ -323,6 +327,7 @@ func TestProxyHandlerFactory_RequestIDPropagation(t *testing.T) {
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("X-Echo-Request-ID", r.Header.Get("X-Request-ID"))
+		w.Header().Set("X-Echo-Trace-ID", r.Header.Get("X-Trace-ID"))
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		// Send SSE data that will be parsed for token counting
@@ -364,6 +369,15 @@ func TestProxyHandlerFactory_RequestIDPropagation(t *testing.T) {
 	assert.Equal(t, clientReqID1, recorder1.Header().Get("X-Echo-Request-ID"))
 	mockBilling.AssertCalled(t, "ReportUsage", mock.AnythingOfType("billing.UsageRecord"))
 	assert.Equal(t, clientReqID1, capturedRecord.RequestID)
+	clientTraceID1 := recorder1.Header().Get("X-Trace-ID")
+	assert.NotEmpty(t, clientTraceID1)
+	assert.Equal(t, clientTraceID1, recorder1.Header().Get("X-Echo-Trace-ID"))
+	assert.Equal(t, clientTraceID1, capturedRecord.TraceID)
+	assert.Equal(t, "official", capturedRecord.UsageSource)
+	assert.Equal(t, 5, capturedRecord.PromptTokens)
+	assert.Equal(t, 10, capturedRecord.CompletionTokens)
+	assert.Equal(t, 15, capturedRecord.TotalTokens)
+	assert.Equal(t, "completed", capturedRecord.RequestStatus)
 	mockBilling.Calls = []mock.Call{} // Clear calls for next test
 
 	// Test 2: With incoming X-Request-ID, should propagate it.

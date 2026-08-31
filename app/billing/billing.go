@@ -6,23 +6,41 @@ import (
 
 // UsageRecord defines billing data for a single request
 type UsageRecord struct {
-	RequestID   string    `json:"request_id"`
-	Model       string    `json:"model"`
-	User        string    `json:"user"`       // Can be extended to UserID or API Key
-	OrgID       string    `json:"org_id"`     // Organization ID
-	ProjectID   string    `json:"project_id"` // Project ID
-	TotalTokens int       `json:"total_tokens"`
-	Timestamp   time.Time `json:"timestamp"`
+	RequestID string `json:"request_id"`
+	TraceID   string `json:"trace_id"`
+	Model     string `json:"model"`
+	User      string `json:"user"`       // Can be extended to UserID or API Key
+	OrgID     string `json:"org_id"`     // Organization ID
+	ProjectID string `json:"project_id"` // Project ID
+
+	// PromptTokens / CompletionTokens are the split from vLLM usage when available.
+	// TotalTokens equals PromptTokens + CompletionTokens and is the value deducted.
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+
+	// UsageSource is "official" when the value came from vLLM usage, or "estimated"
+	// when it was derived from SSE chunk counting (an approximation, not exact tokens).
+	UsageSource string `json:"usage_source"`
+
+	// RequestStatus records how the upstream request finished:
+	// "completed", "client_disconnected", "upstream_failed", or "timed_out".
+	RequestStatus string `json:"request_status"`
+
+	// State is the settlement state of this ledger entry:
+	// "billed", "refunded". It is set by the billing backend.
+	State     string    `json:"state"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // APIKeyInfo contains metadata for an authenticated API key
 type APIKeyInfo struct {
 	Fingerprint string    `json:"fingerprint"`
-	OrgID     string    `json:"org_id"`
-	ProjectID string    `json:"project_id"`
-	Status    string    `json:"status"` // "active", "suspended", "revoked"
-	Name      string    `json:"name"`   // Human-readable name for the API key
-	CreatedAt time.Time `json:"created_at"`
+	OrgID       string    `json:"org_id"`
+	ProjectID   string    `json:"project_id"`
+	Status      string    `json:"status"` // "active", "suspended", "revoked"
+	Name        string    `json:"name"`   // Human-readable name for the API key
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // BillingService defines the interface for billing services

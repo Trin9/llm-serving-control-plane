@@ -30,12 +30,15 @@ var lineBufferPool = sync.Pool{
 
 // TokenStats 用于跟踪流式响应中的 token 统计信息
 type TokenStats struct {
-	model           string
-	route           string
-	startTime       time.Time
-	firstTokenTime  time.Time
-	tokenCount      int
-	firstTokenFound bool
+	model            string
+	route            string
+	startTime        time.Time
+	firstTokenTime   time.Time
+	tokenCount       int
+	promptTokens     int
+	completionTokens int
+	usageSource      string // "official" (vLLM usage) or "estimated" (chunk-based)
+	firstTokenFound  bool
 }
 
 // NewTokenStats 创建一个新的 TokenStats 实例
@@ -80,20 +83,29 @@ func (ts *TokenStats) RecordTPOT() {
 	}
 }
 
-// PhaseSSEDataAndReport 检查并处理 SSE 数据行（W12 优化版）
+// PhaseSSEDataAndReport inspects a Server-Sent Events (SSE) data line and updates
+// the token statistics carried by TokenStats. The gateway consumes the OpenAI
+// compatible Chat Completions streaming format, which vLLM also serves.
 //
-// OpenAI 标准 SSE 响应结构示例：
+// Protocol references:
+//   - OpenAI Chat Completions API (streaming):
+//     https://platform.openai.com/docs/api-reference/chat/create
+//   - vLLM OpenAI-compatible server:
+//     https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html
 //
-//  1. 普通 Token 数据块 (每行开头有 "data: "):
-//     data: {"id":"...","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":null}]}
+// SSE response structure (each "data: " line is followed by a blank line "\n\n"):
 //
-//  2. 包含统计信息的最后一个数据块 (vLLM 默认在最后一个 chunk 返回 usage):
+//  1. Regular token chunk:
+//     data: {"id":"...","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}
+//
+//  2. Final chunk carrying usage (vLLM returns usage on the last chunk before [DONE]):
 //     data: {"id":"...","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":10,"total_tokens":15}}
 //
-//  3. 结束标志:
+//  3. Stream end marker:
 //     data: [DONE]
 //
-// 只对包含 usage 字段的最后一个 Chunk 做完整 JSON 解析，避免每个 Chunk 都消耗 CPU
+// Only the chunk that contains "usage" is fully parsed as JSON; other chunks are
+// matched cheaply at the string level to keep the hot path fast.
 func PhaseSSEDataAndReport(line []byte, stats *TokenStats) bool {
 	lineStr := string(line)
 
@@ -107,10 +119,19 @@ func PhaseSSEDataAndReport(line []byte, stats *TokenStats) bool {
 			if err := json.Unmarshal([]byte(dataContent), &sseData); err == nil {
 				// 提取官方 token 统计（如果存在）
 				if usage, ok := sseData["usage"].(map[string]any); ok {
+					if promptTokens, ok := usage["prompt_tokens"].(float64); ok {
+						stats.promptTokens = int(promptTokens)
+					}
+					if completionTokens, ok := usage["completion_tokens"].(float64); ok {
+						stats.completionTokens = int(completionTokens)
+					}
 					if totalTokens, ok := usage["total_tokens"].(float64); ok {
 						// 使用官方统计覆盖手动计数（更准确）
 						stats.tokenCount = int(totalTokens)
+					} else if stats.completionTokens > 0 {
+						stats.tokenCount = stats.promptTokens + stats.completionTokens
 					}
+					stats.usageSource = "official"
 				}
 			} else {
 				fmt.Printf("⚠️ WARN: Failed to parse SSE data with usage: %v, content: %s\n", err, dataContent)
@@ -122,6 +143,9 @@ func PhaseSSEDataAndReport(line []byte, stats *TokenStats) bool {
 			if strings.Contains(dataContent, `"choices"`) {
 				// 这是一个有效的 token 数据，增加计数
 				stats.IncrementTokenCount()
+				if stats.usageSource == "" {
+					stats.usageSource = "estimated"
+				}
 
 				if !stats.firstTokenFound {
 					// 处理第一个 token
@@ -144,8 +168,13 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 		if requestID == "" {
 			requestID = uuid.New().String()
 		}
+		traceID := c.Request.Header.Get("X-Trace-ID")
+		if traceID == "" {
+			traceID = uuid.New().String()
+		}
 		c.Set("X-Request-ID", requestID)
 		c.Writer.Header().Set("X-Request-ID", requestID)
+		c.Writer.Header().Set("X-Trace-ID", traceID)
 
 		// B. Authentication & Quota Pre-check (Already handled by middleware)
 		// Extract IDs set by AuthMiddleware
@@ -202,6 +231,7 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 			proxyReq.Header.Set("Authorization", "Bearer "+upstreamAPIKey)
 		}
 		proxyReq.Header.Set("X-Request-ID", requestID) // 将 Request ID 传递给上游
+		proxyReq.Header.Set("X-Trace-ID", traceID)     // 将 Trace ID 传递给上游
 
 		// C. 发送请求
 		client := &http.Client{
@@ -257,6 +287,7 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 		// E. 核心循环：读取 vLLM 的流，实时写回 Client
 		// 使用 32KB Reader 缓冲减少系统调用次数
 		reader := bufio.NewReaderSize(resp.Body, 32*1024)
+		requestStatus := "completed"
 
 		for {
 			// 使用 ReadBytes('\n') 确保每次读取都是完整的一行
@@ -269,7 +300,9 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 				// 处理最后可能剩下的数据（如果没有以 \n 结尾）
 				if len(line) > 0 {
 					PhaseSSEDataAndReport(line, stats)
-					c.Writer.Write(line)
+					if _, wErr := c.Writer.Write(line); wErr != nil {
+						requestStatus = "client_disconnected"
+					}
 					c.Writer.Flush()
 				}
 				break
@@ -286,6 +319,7 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 			_, err = c.Writer.Write(line)
 			if err != nil {
 				// 客户端断开连接
+				requestStatus = "client_disconnected"
 				break
 			}
 			c.Writer.Flush() // 关键！必须立即刷新缓冲区，否则前端看不到打字机效果
@@ -296,16 +330,25 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 
 		// F. Report usage for billing
 		// Construct UsageRecord and report it
-		// Note: tokenCount may be estimated or official value (if vLLM returned usage)
+		// tokenCount is official (vLLM usage) when available, otherwise a chunk-based estimate.
 		if stats.tokenCount > 0 {
+			usageSource := stats.usageSource
+			if usageSource == "" {
+				usageSource = "estimated"
+			}
 			record := billing.UsageRecord{
-				RequestID:   requestID,
-				Model:       stats.model,
-				User:        "anonymous",  // Placeholder for future user tracking
-				OrgID:       orgIDStr,     // From context (set by middleware)
-				ProjectID:   projectIDStr, // From context (set by middleware)
-				TotalTokens: stats.tokenCount,
-				Timestamp:   time.Now(),
+				RequestID:        requestID,
+				TraceID:          traceID,
+				Model:            stats.model,
+				User:             "anonymous", // Placeholder for future user tracking
+				OrgID:            orgIDStr,    // From context (set by middleware)
+				ProjectID:        projectIDStr,
+				PromptTokens:     stats.promptTokens,
+				CompletionTokens: stats.completionTokens,
+				TotalTokens:      stats.tokenCount,
+				UsageSource:      usageSource,
+				RequestStatus:    requestStatus,
+				Timestamp:        time.Now(),
 			}
 			// Non-blocking call, won't affect HTTP response time
 			if err := billingSvc.ReportUsage(record); err != nil {

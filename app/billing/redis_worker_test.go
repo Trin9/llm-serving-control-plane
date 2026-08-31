@@ -136,3 +136,55 @@ func TestRedisBillingService_ReportUsage(t *testing.T) {
 	orgQuota, _ = svc.GetOrgQuota(orgID)
 	assert.Equal(t, -100, orgQuota) // 900 - 1000 = -100
 }
+
+func TestRedisBillingService_UsageLedgerAndRefund(t *testing.T) {
+	svc, mr := setupTestRedis(t)
+	defer mr.Close()
+
+	orgID := "org-1"
+	projID := "proj-1"
+	reqID := "req-ledger-1"
+	svc.SetOrgQuota(orgID, 1000)
+	svc.SetProjectQuota(projID, 500)
+
+	record := UsageRecord{
+		RequestID:        reqID,
+		TraceID:          "trace-1",
+		Model:            "gpt-3.5-turbo",
+		OrgID:            orgID,
+		ProjectID:        projID,
+		PromptTokens:     20,
+		CompletionTokens: 80,
+		TotalTokens:      100,
+		UsageSource:      "official",
+		RequestStatus:    "completed",
+	}
+
+	err := svc.ReportUsage(record)
+	assert.NoError(t, err)
+
+	// Ledger entry must be persisted.
+	ledger, err := svc.GetUsageLedger(reqID)
+	assert.NoError(t, err)
+	assert.Equal(t, "trace-1", ledger["trace_id"])
+	assert.Equal(t, "official", ledger["usage_source"])
+	assert.Equal(t, "100", ledger["total_tokens"])
+	assert.Equal(t, "billed", ledger["state"])
+
+	orgQuota, _ := svc.GetOrgQuota(orgID)
+	assert.Equal(t, 900, orgQuota)
+
+	// Refund credits back the tokens and marks the entry as refunded.
+	err = svc.RefundUsage(reqID)
+	assert.NoError(t, err)
+
+	orgQuota, _ = svc.GetOrgQuota(orgID)
+	assert.Equal(t, 1000, orgQuota)
+
+	ledger, _ = svc.GetUsageLedger(reqID)
+	assert.Equal(t, "refunded", ledger["state"])
+
+	// Refunding an already refunded request is idempotent.
+	err = svc.RefundUsage(reqID)
+	assert.Equal(t, ErrAlreadyProcessed, err)
+}
