@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -142,16 +143,22 @@ func (r *InferenceServiceReconciler) reconcileDeployment(ctx context.Context, in
 
 	changed := !reflect.DeepEqual(existing.Labels, deployment.Labels) ||
 		!reflect.DeepEqual(existing.Spec.Replicas, deployment.Spec.Replicas) ||
+		!reflect.DeepEqual(existing.Spec.Strategy, deployment.Spec.Strategy) ||
 		!reflect.DeepEqual(existing.Spec.Template.Labels, deployment.Spec.Template.Labels) ||
-		!reflect.DeepEqual(existing.Spec.Template.Spec.Containers, deployment.Spec.Template.Spec.Containers)
+		!reflect.DeepEqual(existing.Spec.Template.Spec.Containers, deployment.Spec.Template.Spec.Containers) ||
+		!reflect.DeepEqual(existing.Spec.Template.Spec.NodeSelector, deployment.Spec.Template.Spec.NodeSelector) ||
+		!reflect.DeepEqual(existing.Spec.Template.Spec.Tolerations, deployment.Spec.Template.Spec.Tolerations)
 	if !changed {
 		return nil
 	}
 
 	existing.Labels = deployment.Labels
 	existing.Spec.Replicas = deployment.Spec.Replicas
+	existing.Spec.Strategy = deployment.Spec.Strategy
 	existing.Spec.Template.Labels = deployment.Spec.Template.Labels
 	existing.Spec.Template.Spec.Containers = deployment.Spec.Template.Spec.Containers
+	existing.Spec.Template.Spec.NodeSelector = deployment.Spec.Template.Spec.NodeSelector
+	existing.Spec.Template.Spec.Tolerations = deployment.Spec.Template.Spec.Tolerations
 
 	logger.Info("Updating Deployment", "name", deployment.Name)
 	return r.Update(ctx, &existing)
@@ -177,6 +184,24 @@ func (r *InferenceServiceReconciler) buildDeployment(inferSvc *servingv1.Inferen
 		replicas = *inferSvc.Spec.Replicas
 	}
 
+	profile := resourceProfileFor(inferSvc.Spec.ResourceProfile)
+
+	// 扩缩容可能重建 Recreate 策略下的 GPU Pod；GPU 调度必须精确到节点。
+	strategy := appsv1.DeploymentStrategy{
+		Type: appsv1.RecreateDeploymentStrategyType,
+	}
+
+	podSpec := corev1.PodSpec{
+		Containers: []corev1.Container{
+			r.buildContainer(inferSvc, profile),
+		},
+		NodeSelector: profile.nodeSelector,
+		Tolerations:  profile.tolerations,
+	}
+	if len(podSpec.Tolerations) == 0 {
+		podSpec.Tolerations = nil
+	}
+
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      inferSvc.Name,
@@ -185,6 +210,7 @@ func (r *InferenceServiceReconciler) buildDeployment(inferSvc *servingv1.Inferen
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
+			Strategy: strategy,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: labels,
 			},
@@ -192,18 +218,77 @@ func (r *InferenceServiceReconciler) buildDeployment(inferSvc *servingv1.Inferen
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: labels,
 				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						r.buildContainer(inferSvc),
-					},
-				},
+				Spec: podSpec,
 			},
 		},
 	}
 }
 
+// resourceProfile 描述一个 ResourceProfile 生成的资源与调度约束。
+type resourceProfile struct {
+	gpu          int64
+	cpu          string
+	memory       string
+	nodeSelector map[string]string
+	tolerations  []corev1.Toleration
+}
+
+// resourceProfileFor 将 InferenceService.spec.resourceProfile 翻译为 Pod 所需资源和调度配置。
+// 默认 gpu-small；gpu-medium/gpu-large 增加 CPU/内存与 GPU 数量；cpu-only 用于无 GPU 的 mock/本地引擎。
+func resourceProfileFor(profile string) resourceProfile {
+	switch strings.TrimSpace(profile) {
+	case "gpu-large":
+		return resourceProfile{
+			gpu:    2,
+			cpu:    "16",
+			memory: "128Gi",
+			nodeSelector: map[string]string{
+				"nvidia.com/gpu": "true",
+			},
+			tolerations: gpuTolerations(),
+		}
+	case "gpu-medium":
+		return resourceProfile{
+			gpu:    1,
+			cpu:    "8",
+			memory: "64Gi",
+			nodeSelector: map[string]string{
+				"nvidia.com/gpu": "true",
+			},
+			tolerations: gpuTolerations(),
+		}
+	case "cpu-only":
+		return resourceProfile{
+			gpu:    0,
+			cpu:    "2",
+			memory: "8Gi",
+		}
+	default: // gpu-small or empty
+		return resourceProfile{
+			gpu:    1,
+			cpu:    "4",
+			memory: "32Gi",
+			nodeSelector: map[string]string{
+				"nvidia.com/gpu": "true",
+			},
+			tolerations: gpuTolerations(),
+		}
+	}
+}
+
+func gpuTolerations() []corev1.Toleration {
+	return []corev1.Toleration{
+		{
+			Key:      "nvidia.com/gpu",
+			Operator: corev1.TolerationOpEqual,
+			Value:    "true",
+			Effect:   corev1.TaintEffectNoSchedule,
+		},
+	}
+}
+
 // buildContainer 根据 InferenceService 构建 Container
-func (r *InferenceServiceReconciler) buildContainer(inferSvc *servingv1.InferenceService) corev1.Container {
+func (r *InferenceServiceReconciler) buildContainer(inferSvc *servingv1.InferenceService, profile resourceProfile) corev1.Container {
 	engine := inferSvc.Spec.Engine
 	if engine == "" {
 		engine = "vllm" // 默认值
@@ -228,6 +313,22 @@ func (r *InferenceServiceReconciler) buildContainer(inferSvc *servingv1.Inferenc
 		pullPolicy = corev1.PullIfNotPresent
 	}
 
+	resources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resourceMustParse(profile.cpu),
+			corev1.ResourceMemory: resourceMustParse(profile.memory),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resourceMustParse(profile.cpu),
+			corev1.ResourceMemory: resourceMustParse(profile.memory),
+		},
+	}
+	if profile.gpu > 0 {
+		resources.Limits[corev1.ResourceName("nvidia.com/gpu")] = resourceMustParse(fmt.Sprintf("%d", profile.gpu))
+		// 请求和限制保持一致，避免 GPU 过量承诺
+		resources.Requests[corev1.ResourceName("nvidia.com/gpu")] = resourceMustParse(fmt.Sprintf("%d", profile.gpu))
+	}
+
 	return corev1.Container{
 		Name:            engine,
 		Image:           image,
@@ -240,9 +341,28 @@ func (r *InferenceServiceReconciler) buildContainer(inferSvc *servingv1.Inferenc
 				Protocol:      corev1.ProtocolTCP,
 			},
 		},
-		// 资源配置可以根据 ResourceProfile 扩展
-		// 暂时使用默认配置
+		Resources: resources,
+		ReadinessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path:   "/health",
+					Port:   intstr.FromInt(8000),
+					Scheme: corev1.URISchemeHTTP,
+				},
+			},
+			InitialDelaySeconds: 60,
+			PeriodSeconds:       10,
+			FailureThreshold:    3,
+		},
 	}
+}
+
+func resourceMustParse(value string) resource.Quantity {
+	q, err := resource.ParseQuantity(value)
+	if err != nil || value == "" {
+		return resource.MustParse("1")
+	}
+	return q
 }
 
 // getEngineConfig 根据引擎类型返回默认镜像和启动参数

@@ -39,6 +39,7 @@ type InferenceServiceSpec struct {
 
 	// ResourceProfile defines the compute resource template (e.g., "gpu-small", "gpu-large", "cpu-only")
 	// +kubebuilder:default="gpu-small"
+	// +kubebuilder:validation:Enum=gpu-small;gpu-medium;gpu-large;cpu-only
 	// +optional
 	ResourceProfile string `json:"resourceProfile,omitempty"`
 

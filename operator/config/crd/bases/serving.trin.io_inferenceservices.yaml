@@ -97,6 +97,11 @@ spec:
                 default: gpu-small
                 description: ResourceProfile defines the compute resource template
                   (e.g., "gpu-small", "gpu-large", "cpu-only")
+                enum:
+                - gpu-small
+                - gpu-medium
+                - gpu-large
+                - cpu-only
                 type: string
             required:
             - modelName

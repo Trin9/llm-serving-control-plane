@@ -308,7 +308,7 @@ func TestPhaseSSEDataAndReport_UsageDegradation(t *testing.T) {
 
 	// Final chunk with [DONE] and no usage (simulating a scenario where usage is never provided by upstream).
 	assert.False(t, PhaseSSEDataAndReport([]byte(`data: [DONE]`), stats))
-	assert.Equal(t, 2, stats.tokenCount) // Should still be 2 from manual counting.
+	assert.Equal(t, 2, stats.tokenCount)            // Should still be 2 from manual counting.
 	assert.Equal(t, "estimated", stats.usageSource) // Chunk counting is an approximation.
 
 	// Now a chunk with usage, should override.
