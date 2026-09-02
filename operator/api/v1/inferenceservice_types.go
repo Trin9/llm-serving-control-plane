@@ -17,6 +17,7 @@ limitations under the License.
 package v1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -42,6 +43,19 @@ type InferenceServiceSpec struct {
 	// +kubebuilder:validation:Enum=gpu-small;gpu-medium;gpu-large;cpu-only
 	// +optional
 	ResourceProfile string `json:"resourceProfile,omitempty"`
+
+	// NodeSelector constrains Pods to nodes with the given labels. GPU requests
+	// select GPU-capable nodes by themselves; use this only for cluster-specific labels.
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations allow Pods onto nodes with matching taints.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// Affinity controls node and Pod affinity/anti-affinity scheduling rules.
+	// +optional
+	Affinity *corev1.Affinity `json:"affinity,omitempty"`
 
 	// Engine specifies the inference engine type (e.g., "vllm", "triton", "tgi", "tensorrt", "mock")
 	// Use "mock" for local testing without GPU

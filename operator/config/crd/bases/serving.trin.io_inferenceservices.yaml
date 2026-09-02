@@ -55,6 +55,10 @@ spec:
           spec:
             description: spec defines the desired state of InferenceService
             properties:
+              affinity:
+                description: Affinity controls node and Pod affinity/anti-affinity scheduling rules.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
               engine:
                 default: vllm
                 description: |-
@@ -87,6 +91,13 @@ spec:
                 x-kubernetes-validations:
                 - message: modelName is immutable after creation
                   rule: self == oldSelf
+              nodeSelector:
+                additionalProperties:
+                  type: string
+                description: |-
+                  NodeSelector constrains Pods to nodes with the given labels. GPU requests
+                  select GPU-capable nodes by themselves; use this only for cluster-specific labels.
+                type: object
               replicas:
                 default: 1
                 description: Replicas is the number of desired pods running the model
@@ -103,6 +114,12 @@ spec:
                 - gpu-large
                 - cpu-only
                 type: string
+              tolerations:
+                description: Tolerations allow Pods onto nodes with matching taints.
+                items:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                type: array
             required:
             - modelName
             type: object

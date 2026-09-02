@@ -68,6 +68,35 @@ redis.call("EXPIRE", ledger_key, 86400)
 return {1, "success"}
 `
 
+const luaRefundUsage = `
+local ledger_key = KEYS[1]
+local state = redis.call("HGET", ledger_key, "state")
+if not state then
+	return {0, "ledger_not_found"}
+end
+if state == "refunded" then
+	return {0, "already_refunded"}
+end
+if state ~= "billed" then
+	return {0, "invalid_state"}
+end
+
+local tokens = tonumber(redis.call("HGET", ledger_key, "total_tokens")) or 0
+local org_id = redis.call("HGET", ledger_key, "org_id")
+local project_id = redis.call("HGET", ledger_key, "project_id")
+if not org_id or not project_id then
+	return {0, "invalid_ledger"}
+end
+
+if tokens > 0 then
+	redis.call("INCRBY", "quota:org:" .. org_id, tokens)
+	redis.call("INCRBY", "quota:project:" .. project_id, tokens)
+end
+redis.call("HSET", ledger_key, "state", "refunded")
+
+return {1, "success", tokens}
+`
+
 var (
 	ErrAPIKeyNotFound        = errors.New("API key not found")
 	ErrAPIKeyInactive        = errors.New("API key is not active")
@@ -295,35 +324,39 @@ func (s *RedisBillingService) GetUsageLedger(requestID string) (map[string]strin
 // upstream failure, or duplicate billing.
 func (s *RedisBillingService) RefundUsage(requestID string) error {
 	key := fmt.Sprintf("usage:ledger:%s", requestID)
-	ledger, err := s.client.HGetAll(s.ctx, key).Result()
+	result, err := s.client.Eval(s.ctx, luaRefundUsage, []string{key}).Result()
 	if err != nil {
-		return err
-	}
-	if len(ledger) == 0 {
-		return fmt.Errorf("ledger entry not found for request %s", requestID)
-	}
-	if ledger["state"] == "refunded" {
-		return ErrAlreadyProcessed
+		return fmt.Errorf("refund lua script failed: %w", err)
 	}
 
-	tokens := 0
-	if v, ok := ledger["total_tokens"]; ok {
-		tokens, _ = strconv.Atoi(v)
+	resultSlice, ok := result.([]interface{})
+	if !ok || len(resultSlice) < 2 {
+		return fmt.Errorf("unexpected refund lua script result format: %v", result)
 	}
-
-	orgQuotaKey := fmt.Sprintf("quota:org:%s", ledger["org_id"])
-	projectQuotaKey := fmt.Sprintf("quota:project:%s", ledger["project_id"])
-	if tokens > 0 {
-		if err := s.client.IncrBy(s.ctx, orgQuotaKey, int64(tokens)).Err(); err != nil {
-			return err
+	code, ok := resultSlice[0].(int64)
+	if !ok {
+		return fmt.Errorf("unexpected refund lua script result code: %v", resultSlice[0])
+	}
+	message, ok := resultSlice[1].(string)
+	if !ok {
+		return fmt.Errorf("unexpected refund lua script result message: %v", resultSlice[1])
+	}
+	if code == 0 {
+		switch message {
+		case "already_refunded":
+			return ErrAlreadyProcessed
+		case "ledger_not_found":
+			return fmt.Errorf("ledger entry not found for request %s", requestID)
+		default:
+			return fmt.Errorf("refund rejected: %s", message)
 		}
-		if err := s.client.IncrBy(s.ctx, projectQuotaKey, int64(tokens)).Err(); err != nil {
-			return err
-		}
 	}
-
-	if err := s.client.HSet(s.ctx, key, "state", "refunded").Err(); err != nil {
-		return err
+	if code != 1 || len(resultSlice) < 3 {
+		return fmt.Errorf("unexpected refund lua script result: %v", result)
+	}
+	tokens, ok := resultSlice[2].(int64)
+	if !ok {
+		return fmt.Errorf("unexpected refund token count: %v", resultSlice[2])
 	}
 	log.Printf("🔁 [BILLING] Refunded request=%s tokens=%d", requestID, tokens)
 	return nil

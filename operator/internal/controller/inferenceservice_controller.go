@@ -147,7 +147,8 @@ func (r *InferenceServiceReconciler) reconcileDeployment(ctx context.Context, in
 		!reflect.DeepEqual(existing.Spec.Template.Labels, deployment.Spec.Template.Labels) ||
 		!reflect.DeepEqual(existing.Spec.Template.Spec.Containers, deployment.Spec.Template.Spec.Containers) ||
 		!reflect.DeepEqual(existing.Spec.Template.Spec.NodeSelector, deployment.Spec.Template.Spec.NodeSelector) ||
-		!reflect.DeepEqual(existing.Spec.Template.Spec.Tolerations, deployment.Spec.Template.Spec.Tolerations)
+		!reflect.DeepEqual(existing.Spec.Template.Spec.Tolerations, deployment.Spec.Template.Spec.Tolerations) ||
+		!reflect.DeepEqual(existing.Spec.Template.Spec.Affinity, deployment.Spec.Template.Spec.Affinity)
 	if !changed {
 		return nil
 	}
@@ -159,6 +160,7 @@ func (r *InferenceServiceReconciler) reconcileDeployment(ctx context.Context, in
 	existing.Spec.Template.Spec.Containers = deployment.Spec.Template.Spec.Containers
 	existing.Spec.Template.Spec.NodeSelector = deployment.Spec.Template.Spec.NodeSelector
 	existing.Spec.Template.Spec.Tolerations = deployment.Spec.Template.Spec.Tolerations
+	existing.Spec.Template.Spec.Affinity = deployment.Spec.Template.Spec.Affinity
 
 	logger.Info("Updating Deployment", "name", deployment.Name)
 	return r.Update(ctx, &existing)
@@ -195,8 +197,9 @@ func (r *InferenceServiceReconciler) buildDeployment(inferSvc *servingv1.Inferen
 		Containers: []corev1.Container{
 			r.buildContainer(inferSvc, profile),
 		},
-		NodeSelector: profile.nodeSelector,
-		Tolerations:  profile.tolerations,
+		NodeSelector: inferSvc.Spec.NodeSelector,
+		Tolerations:  inferSvc.Spec.Tolerations,
+		Affinity:     inferSvc.Spec.Affinity,
 	}
 	if len(podSpec.Tolerations) == 0 {
 		podSpec.Tolerations = nil
@@ -226,11 +229,9 @@ func (r *InferenceServiceReconciler) buildDeployment(inferSvc *servingv1.Inferen
 
 // resourceProfile 描述一个 ResourceProfile 生成的资源与调度约束。
 type resourceProfile struct {
-	gpu          int64
-	cpu          string
-	memory       string
-	nodeSelector map[string]string
-	tolerations  []corev1.Toleration
+	gpu    int64
+	cpu    string
+	memory string
 }
 
 // resourceProfileFor 将 InferenceService.spec.resourceProfile 翻译为 Pod 所需资源和调度配置。
@@ -242,20 +243,12 @@ func resourceProfileFor(profile string) resourceProfile {
 			gpu:    2,
 			cpu:    "16",
 			memory: "128Gi",
-			nodeSelector: map[string]string{
-				"nvidia.com/gpu": "true",
-			},
-			tolerations: gpuTolerations(),
 		}
 	case "gpu-medium":
 		return resourceProfile{
 			gpu:    1,
 			cpu:    "8",
 			memory: "64Gi",
-			nodeSelector: map[string]string{
-				"nvidia.com/gpu": "true",
-			},
-			tolerations: gpuTolerations(),
 		}
 	case "cpu-only":
 		return resourceProfile{
@@ -268,22 +261,7 @@ func resourceProfileFor(profile string) resourceProfile {
 			gpu:    1,
 			cpu:    "4",
 			memory: "32Gi",
-			nodeSelector: map[string]string{
-				"nvidia.com/gpu": "true",
-			},
-			tolerations: gpuTolerations(),
 		}
-	}
-}
-
-func gpuTolerations() []corev1.Toleration {
-	return []corev1.Toleration{
-		{
-			Key:      "nvidia.com/gpu",
-			Operator: corev1.TolerationOpEqual,
-			Value:    "true",
-			Effect:   corev1.TaintEffectNoSchedule,
-		},
 	}
 }
 

@@ -17,14 +17,12 @@ func TestResourceProfileFor(t *testing.T) {
 		cpu     string
 		memory  string
 		hasGPU  bool
-		hasNode bool
-		hasTol  bool
 	}{
-		{name: "defaults to gpu-small", profile: "", gpu: 1, cpu: "4", memory: "32Gi", hasGPU: true, hasNode: true, hasTol: true},
-		{name: "gpu-small", profile: "gpu-small", gpu: 1, cpu: "4", memory: "32Gi", hasGPU: true, hasNode: true, hasTol: true},
-		{name: "gpu-medium", profile: "gpu-medium", gpu: 1, cpu: "8", memory: "64Gi", hasGPU: true, hasNode: true, hasTol: true},
-		{name: "gpu-large", profile: "gpu-large", gpu: 2, cpu: "16", memory: "128Gi", hasGPU: true, hasNode: true, hasTol: true},
-		{name: "cpu-only", profile: "cpu-only", gpu: 0, cpu: "2", memory: "8Gi", hasGPU: false, hasNode: false, hasTol: false},
+		{name: "defaults to gpu-small", profile: "", gpu: 1, cpu: "4", memory: "32Gi", hasGPU: true},
+		{name: "gpu-small", profile: "gpu-small", gpu: 1, cpu: "4", memory: "32Gi", hasGPU: true},
+		{name: "gpu-medium", profile: "gpu-medium", gpu: 1, cpu: "8", memory: "64Gi", hasGPU: true},
+		{name: "gpu-large", profile: "gpu-large", gpu: 2, cpu: "16", memory: "128Gi", hasGPU: true},
+		{name: "cpu-only", profile: "cpu-only", gpu: 0, cpu: "2", memory: "8Gi", hasGPU: false},
 	}
 
 	for _, test := range tests {
@@ -34,8 +32,6 @@ func TestResourceProfileFor(t *testing.T) {
 			assert.Equal(t, test.cpu, profile.cpu)
 			assert.Equal(t, test.memory, profile.memory)
 			assert.Equal(t, test.hasGPU, profile.gpu > 0)
-			assert.Equal(t, test.hasNode, len(profile.nodeSelector) > 0)
-			assert.Equal(t, test.hasTol, len(profile.tolerations) > 0)
 		})
 	}
 }
@@ -47,6 +43,11 @@ func TestBuildDeployment_AppliesGPUProfile(t *testing.T) {
 			ModelName:       "Qwen/Qwen2.5-7B-Instruct",
 			Engine:          "vllm",
 			ResourceProfile: "gpu-large",
+			NodeSelector:    map[string]string{"accelerator.example.com/model": "A100"},
+			Tolerations: []corev1.Toleration{{
+				Key: "nvidia.com/gpu", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule,
+			}},
+			Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{}},
 		},
 	}
 
@@ -57,8 +58,9 @@ func TestBuildDeployment_AppliesGPUProfile(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "2", gpuQuantity.String())
 
-	assert.Equal(t, "true", deployment.Spec.Template.Spec.NodeSelector["nvidia.com/gpu"])
+	assert.Equal(t, "A100", deployment.Spec.Template.Spec.NodeSelector["accelerator.example.com/model"])
 	assert.Len(t, deployment.Spec.Template.Spec.Tolerations, 1)
+	assert.NotNil(t, deployment.Spec.Template.Spec.Affinity)
 	assert.NotNil(t, container.ReadinessProbe)
 	assert.Equal(t, "/health", container.ReadinessProbe.HTTPGet.Path)
 

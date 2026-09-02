@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -187,4 +188,46 @@ func TestRedisBillingService_UsageLedgerAndRefund(t *testing.T) {
 	// Refunding an already refunded request is idempotent.
 	err = svc.RefundUsage(reqID)
 	assert.Equal(t, ErrAlreadyProcessed, err)
+}
+
+func TestRedisBillingService_RefundUsageIsAtomic(t *testing.T) {
+	svc, mr := setupTestRedis(t)
+	defer mr.Close()
+
+	require.NoError(t, svc.SetOrgQuota("org-1", 1000))
+	require.NoError(t, svc.SetProjectQuota("proj-1", 1000))
+	require.NoError(t, svc.ReportUsage(UsageRecord{
+		RequestID: "req-concurrent-refund", OrgID: "org-1", ProjectID: "proj-1", TotalTokens: 100,
+	}))
+
+	var group sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			errs <- svc.RefundUsage("req-concurrent-refund")
+		}()
+	}
+	group.Wait()
+	close(errs)
+
+	successes := 0
+	alreadyProcessed := 0
+	for err := range errs {
+		if err == nil {
+			successes++
+		} else if err == ErrAlreadyProcessed {
+			alreadyProcessed++
+		}
+	}
+	assert.Equal(t, 1, successes)
+	assert.Equal(t, 1, alreadyProcessed)
+
+	orgQuota, err := svc.GetOrgQuota("org-1")
+	require.NoError(t, err)
+	projectQuota, err := svc.GetProjectQuota("proj-1")
+	require.NoError(t, err)
+	assert.Equal(t, 1000, orgQuota)
+	assert.Equal(t, 1000, projectQuota)
 }
