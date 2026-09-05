@@ -1,4 +1,4 @@
-# gate-service 的默认配置 (会被父级 values.yaml 中的 gate-service 部分覆盖)
+# Default configuration for gate-service (overridden by the gate-service section of the parent values.yaml)
 
 enabled: true
 replicaCount: 1
@@ -24,6 +24,6 @@ env:
   # Existing Secret whose keys are injected as environment variables. Production
   # deployments should provide JWT_SECRET, REDIS_PASSWORD, and VLLM_API_KEY here.
   existingSecret: ""
-  # 路由后端的 URL 列表，逗号分隔。默认指向一个 mock 服务。
+  # Comma-separated URL list of routing backends. By default points to a mock service.
   VLLM_URLS: "http://mock-service.default.svc.cluster.local:8000/v1/chat/completions"
   REDIS_ADDR: "llm-operator-redis.default.svc.cluster.local:6379"

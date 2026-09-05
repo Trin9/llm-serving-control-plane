@@ -42,7 +42,7 @@ spec:
         command: ["python3", "-m", "vllm.entrypoints.openai.api_server"]
         args:
           - "--model"
-          - "/mnt/qwen-models/qwen/Qwen1.5-4B-Chat" # S3 路径
+          - "/mnt/qwen-models/qwen/Qwen1.5-4B-Chat" # S3 path
           - "--tensor-parallel-size"
           - "1"
           - "--gpu-memory-utilization"

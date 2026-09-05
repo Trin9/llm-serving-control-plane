@@ -1,18 +1,18 @@
-# Terraform 本地环境
+# Terraform Local Environment
 
-使用 **Kind**（Kubernetes in Docker）创建本地开发集群，并配置**基础设施**：集群 + 存储（PV/PVC）。**不部署应用**，应用由 Helm 部署。
+Use **Kind** (Kubernetes in Docker) to create a local development cluster and configure the **infrastructure**: cluster + storage (PV/PVC). **Applications are not deployed**; they are deployed with Helm.
 
-## 本模块创建的资源
+## Resources Created by This Module
 
-| 资源 | 说明 |
+| Resource | Description |
 |:---|:---|
-| Kind 集群 | 1 control-plane + 1 worker，端口 80→8080 映射 |
-| PV (model-pv) | hostPath，用于模型或数据挂载 |
-| PVC (model-pvc) | default 命名空间，绑定上述 PV |
+| Kind cluster | 1 control-plane + 1 worker, port 80→8080 mapping |
+| PV (model-pv) | hostPath, used to mount models or data |
+| PVC (model-pvc) | default namespace, bound to the PV above |
 
-**不包含**：Operator、vLLM、Gate Service 等应用，请按 `terraform output next_steps` 使用 Helm 安装。
+**Not included**: applications such as Operator, vLLM, and Gate Service — install them with Helm following `terraform output next_steps`.
 
-## 快速开始
+## Quick Start
 
 ```bash
 cd terraform/local
@@ -21,53 +21,53 @@ terraform init
 terraform apply
 ```
 
-## 下一步：用 Helm 部署应用
+## Next Step: Deploy Applications with Helm
 
-部署完成后执行：
+After the deployment completes, run:
 
 ```bash
-# 1. 配置 kubectl
+# 1. Configure kubectl
 export KUBECONFIG=$(terraform output -raw kubeconfig_path)
 kubectl get nodes
 
-# 2. 查看完整下一步（安装 Operator、创建 InferenceService 等）
+# 2. View the full next steps (install the Operator, create InferenceService, etc.)
 terraform output next_steps
 ```
 
-按输出指引依次执行即可，例如：
+Follow the output guidance in order, for example:
 
-1. 安装 LLM Operator：`helm install llm-operator ../../helm/llm-operator --wait`
-2. 创建 Mock InferenceService：`kubectl apply -f ../../operator/config/samples/serving_v1_inferenceservice_mock.yaml`
-3. （可选）部署 Gate Service：待 `helm/gate-service` Chart 就绪后安装
+1. Install the LLM Operator: `helm install llm-operator ../../helm/llm-operator --wait`
+2. Create a Mock InferenceService: `kubectl apply -f ../../operator/config/samples/serving_v1_inferenceservice_mock.yaml`
+3. (Optional) Deploy the Gate Service: install it once the `helm/gate-service` chart is ready
 
-## 输出说明
+## Outputs
 
-| 输出 | 说明 |
+| Output | Description |
 |:---|:---|
-| `cluster_name` | Kind 集群名称 |
-| `kubeconfig_path` | kubeconfig 文件路径 |
-| `kubeconfig_command` | 导出 KUBECONFIG 的命令 |
-| `storage_info` | PV/PVC 名称、capacity、host_path |
-| `next_steps` | Helm 部署步骤说明 |
+| `cluster_name` | Kind cluster name |
+| `kubeconfig_path` | Path to the kubeconfig file |
+| `kubeconfig_command` | Command to export KUBECONFIG |
+| `storage_info` | PV/PVC names, capacity, host_path |
+| `next_steps` | Helm deployment step guide |
 
-## 访问已部署的应用（需先按 next_steps 用 Helm 部署）
+## Accessing Deployed Applications (requires Helm deployment per next_steps)
 
-若已通过 Helm 部署了 Gate Service，可端口转发访问：
+If you deployed the Gate Service with Helm, you can access it via port-forwarding:
 
 ```bash
 kubectl port-forward service/gate-service-entry 8083:80
 curl http://localhost:8083/health
 ```
 
-若仅部署了 Operator + InferenceService，可查看服务与 Pod：
+If you only deployed the Operator + InferenceService, inspect the services and Pods:
 
 ```bash
 kubectl get inferenceservices
 kubectl get pods -l serving.trin.io/inferenceservice
 ```
 
-## 故障排除
+## Troubleshooting
 
-- **Kind 或 API 未就绪**：脚本会等待最多约 2 分钟，若失败请检查 Docker 与 Kind 版本。
-- **镜像拉取失败**：应用镜像需在集群内可用；Kind 可使用 `kind load docker-image <image>` 从宿主机加载。
-- 更多说明见：[使用指南](../../docs/terraform/usage-guide.md)、[本地部署故障排除](../../docs/terraform/troubleshooting-local-deploy.md)（若存在）。
+- **Kind or the API not ready**: the script waits up to about 2 minutes; if it fails, check the Docker and Kind versions.
+- **Image pull failure**: application images must be available inside the cluster; with Kind you can load them from the host using `kind load docker-image <image>`.
+- More details: [usage guide](../../docs/terraform/usage-guide.md), [local deployment troubleshooting](../../docs/terraform/troubleshooting-local-deploy.md) (if present).

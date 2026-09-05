@@ -10,4 +10,4 @@ spec:
     - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
   hostPath:
-    path: "/tmp/mock-fsx" # 对应脚本创建的目录
+    path: "/tmp/mock-fsx" # directory created by the corresponding script

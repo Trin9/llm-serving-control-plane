@@ -6,16 +6,16 @@ import (
 	"sync"
 )
 
-// MemoryBillingService 是基于内存 Channel 的简单实现
-// 适用于开发测试或单机部署，重启后数据丢失
+// MemoryBillingService is a simple implementation backed by an in-memory channel.
+// It is intended for development/testing or single-node deployments; data is lost on restart.
 type MemoryBillingService struct {
 	queue  chan UsageRecord
 	stopCh chan struct{}
 	wg     sync.WaitGroup
 }
 
-// NewMemoryBillingService 创建一个内存版计费服务
-// bufferSize: 队列缓冲大小
+// NewMemoryBillingService creates an in-memory billing service.
+// bufferSize: queue buffer size
 func NewMemoryBillingService(bufferSize int) *MemoryBillingService {
 	return &MemoryBillingService{
 		queue:  make(chan UsageRecord, bufferSize),
@@ -23,27 +23,27 @@ func NewMemoryBillingService(bufferSize int) *MemoryBillingService {
 	}
 }
 
-// ReportUsage 实现接口：将记录投递到 Channel
-// 如果队列已满，为了不阻塞主流程，可以选择丢弃或记录错误
+// ReportUsage implements the interface by delivering records to the channel.
+// If the queue is full, records are dropped or an error is logged so the main flow is not blocked.
 func (s *MemoryBillingService) ReportUsage(record UsageRecord) error {
 	select {
 	case s.queue <- record:
 		return nil
 	default:
-		// 队列满，记录错误但不阻塞
+		// Queue is full: log an error but do not block
 		log.Printf("⚠️ [BILLING] Queue full, dropping record for request %s", record.RequestID)
 		return fmt.Errorf("billing queue full")
 	}
 }
 
-// Start 启动后台 Worker
+// Start launches the background worker.
 func (s *MemoryBillingService) Start() {
 	s.wg.Add(1)
 	go s.processQueue()
 	log.Println("💰 [BILLING] Memory billing worker started")
 }
 
-// Stop 优雅停止
+// Stop gracefully shuts the worker down.
 func (s *MemoryBillingService) Stop() {
 	close(s.stopCh)
 	s.wg.Wait()
@@ -51,7 +51,7 @@ func (s *MemoryBillingService) Stop() {
 	log.Println("💰 [BILLING] Memory billing worker stopped")
 }
 
-// processQueue 内部处理循环
+// processQueue is the internal processing loop.
 func (s *MemoryBillingService) processQueue() {
 	defer s.wg.Done()
 
@@ -60,7 +60,7 @@ func (s *MemoryBillingService) processQueue() {
 		case record := <-s.queue:
 			s.handleRecord(record)
 		case <-s.stopCh:
-			// 处理完剩余队列再退出
+			// Drain the remaining queue before exiting
 			for {
 				select {
 				case record := <-s.queue:
@@ -73,12 +73,12 @@ func (s *MemoryBillingService) processQueue() {
 	}
 }
 
-// handleRecord 实际的业务处理逻辑（模拟扣费）
+// handleRecord performs the actual business logic (simulated billing).
 func (s *MemoryBillingService) handleRecord(record UsageRecord) {
-	// 模拟计算费用：假设 $0.000002 / Token
+	// Simulate cost calculation: assume $0.000002 / token
 	cost := float64(record.TotalTokens) * 0.000002
 
-	// 在生产环境中，这里会写入数据库或调用支付服务
+	// In production this would write to a database or call a payment service
 	log.Printf("💰 [BILLING] Processed: Request=%s, Model=%s, Tokens=%d, Cost=$%.6f",
 		record.RequestID, record.Model, record.TotalTokens, cost)
 }

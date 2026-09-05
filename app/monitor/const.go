@@ -2,51 +2,50 @@ package monitor
 
 import "github.com/prometheus/client_golang/prometheus"
 
-// --- 1. 定义指标 ---
+// --- 1. Define metrics ---
 var (
-	// 请求总数计数器 (Counter)
+	// Total request counter
 	RequestCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "http_requests_total",
 			Help: "Total number of HTTP requests",
 		},
-		[]string{"method", "status"}, // 标签：方法、状态码
+		[]string{"method", "status"}, // labels: method, status code
 	)
 
-	// 请求耗时直方图 (Histogram)
+	// Request duration histogram
 	RequestDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "http_request_duration_seconds",
 			Help:    "Duration of HTTP requests in seconds",
-			Buckets: prometheus.DefBuckets, // 默认的分桶: .005, .01, .25, .5, 1, 2.5, 5, 10
+			Buckets: prometheus.DefBuckets, // default buckets
 		},
 		[]string{"method"},
 	)
 
-	// AI 指标 - 首字延迟 (Time To First Token)
+	// AI metric - time to first token (TTFT)
 	AITimeToFirstToken = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "ai_ttft_seconds",
 			Help:    "Time to first token in seconds",
-			Buckets: []float64{0.1, 0.5, 1, 2, 5, 10}, // 适配 AI 场景的分桶
+			Buckets: []float64{0.1, 0.5, 1, 2, 5, 10}, // buckets tuned for AI workloads
 		},
-		[]string{"model", "route"}, // 标签：模型名、路由
+		[]string{"model", "route"}, // labels: model name, route
 	)
 
-	// AI 指标 - 单token生成速度 (Time Per Output Token)
+	// AI metric - time per output token (TPOT)
 	AITimePerOutputToken = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "ai_tpot_seconds",
 			Help:    "Time per output token in seconds",
-			Buckets: []float64{0.01, 0.05, 0.1, 0.2, 0.5}, // 更细粒度的分桶
+			Buckets: []float64{0.01, 0.05, 0.1, 0.2, 0.5}, // finer-grained buckets
 		},
-		[]string{"model", "route"}, // 标签：模型名、路由
+		[]string{"model", "route"}, // labels: model name, route
 	)
-
 )
 
 func init() {
-	// 注册指标
+	// Register metrics
 	prometheus.MustRegister(RequestCount)
 	prometheus.MustRegister(RequestDuration)
 	prometheus.MustRegister(AITimeToFirstToken)

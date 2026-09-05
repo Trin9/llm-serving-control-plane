@@ -13,17 +13,17 @@ addons:
     version: latest
 
 managedNodeGroups:
-  # 1. Gate Service 节点 (使用 Spot 实例省钱)
+  # 1. Gate Service node (uses Spot instances to save costs)
   - name: cpu-ng
     instanceTypes: 
       - t3.medium
-      - t3a.medium  # 添加备选实例类型以提高 Spot 可用性
+      - t3a.medium  # add alternative instance types to improve Spot availability
     desiredCapacity: 2
     minSize: 1
     maxSize: 3
-    spot: true  # managedNodeGroups 支持 spot 字段
+    spot: true  # managedNodeGroups supports the spot field
 
-  # 2. LLM GPU 节点
+  # 2. LLM GPU node
   - name: gpu-ng
     instanceTypes:
       - g4dn.xlarge

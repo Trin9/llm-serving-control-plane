@@ -1,4 +1,4 @@
-# 生产环境示例 - 使用 vLLM 引擎
+# Production sample - uses the vLLM engine
 apiVersion: serving.trin.io/v1
 kind: InferenceService
 metadata:

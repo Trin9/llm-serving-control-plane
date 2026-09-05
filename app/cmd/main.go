@@ -44,10 +44,11 @@ func main() {
 	}
 
 	billingSvc.Start()
-	defer billingSvc.Stop() // 确保程序退出时优雅关闭
+	defer billingSvc.Stop() // ensure graceful shutdown on exit
 
-	// 1. 初始化语义路由 (W13)
-	// 生产环境下优先使用 Kubernetes Endpoints 自动发现后端；本地开发仍支持 VLLM_URLS 静态配置。
+	// 1. Initialize semantic routing (W13)
+	// In production, prefer Kubernetes Endpoints for automatic backend discovery;
+	// local development still supports the static VLLM_URLS configuration.
 	staticSource := handler.NewStaticBackendSourceFromEnv("VLLM_URLS", []string{"http://localhost:8000/v1/chat/completions"})
 	var backendSource handler.BackendSource = staticSource
 	usingKubernetesDiscovery := false
@@ -75,21 +76,21 @@ func main() {
 	defer cancel()
 	handler.StartBackendRefresh(ctx, backendSource, routerSvc, 30*time.Second)
 
-	r := gin.Default() // 自带 Logger 和 Recovery 中间件
+	r := gin.Default() // ships with Logger and Recovery middleware
 
 	r.GET("/health", handler.HealthCheckHandler)
 
-	// API 路由组
+	// API route group
 	api := r.Group("/v1")
-	api.Use(middleware.AuthMiddleware(billingSvc)) // 挂载鉴权 (支持 JWT & API Key)
-	api.Use(middleware.RateLimitMiddleware())      // 挂载限流
-	api.Use(middleware.PrometheusMiddleware())     // 挂载监控
+	api.Use(middleware.AuthMiddleware(billingSvc)) // mount auth middleware (supports JWT & API Key)
+	api.Use(middleware.RateLimitMiddleware())      // mount rate limiting
+	api.Use(middleware.PrometheusMiddleware())     // mount monitoring
 
-	// --- 3. 暴露 /metrics 接口 ---
-	// Prometheus 会访问这个接口来“刮取”数据
+	// --- 3. Expose the /metrics endpoint ---
+	// Prometheus scrapes metrics from this endpoint
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
-	// 使用工厂方法注入计费服务和路由策略 (W13)
+	// Use the factory method to inject the billing service and routing strategy (W13)
 	api.POST("/chat/completions", handler.ProxyHandlerFactory(billingSvc, routerSvc))
 
 	r.Run(":8080")

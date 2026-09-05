@@ -1,12 +1,12 @@
 #!/bin/bash
 # =============================================================================
-# LLM Serving 全量服务一键启动脚本
-# 根据环境（Kubernetes 或 Local Docker Compose）启动相应服务
+# LLM Serving one-click startup script for all services
+# Starts the appropriate services based on the environment (Kubernetes or Local Docker Compose)
 # =============================================================================
 
 set -e
 
-# ---- 可配置变量（按实际环境修改） ----
+# ---- Configurable variables (adjust to match your environment) ----
 # These are primarily for local non-K8s deployments or if Helm values need overrides
 VLLM_MODEL="${VLLM_MODEL:-/root/autodl-tmp/qwen/Qwen1.5-4B-Chat}"
 VLLM_SERVED_NAME="${VLLM_SERVED_NAME:-Qwen1.5-4B-Chat}"
@@ -17,7 +17,7 @@ PROJECT_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 LOG_DIR="${LOG_DIR:-/tmp}" # For manually started processes like dcgm-exporter
 
-# ---- 辅助函数 ----
+# ---- Helper functions ----
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 err() { echo "[$(date +%H:%M:%S)] ERROR: $*" >&2; exit 1; }
 
@@ -61,7 +61,7 @@ wait_for_url() {
   return 1
 }
 
-# ---- 主流程 ----
+# ---- Main flow ----
 main() {
   log "=== LLM Serving All Services Start ==="
 

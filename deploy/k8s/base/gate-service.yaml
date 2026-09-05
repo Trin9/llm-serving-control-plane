@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: gate
-        image: trin9/gate-service:latest # ⚠️ 修改这里
+        image: trin9/gate-service:latest # ⚠️ change this
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
@@ -42,4 +42,4 @@ spec:
     - protocol: TCP
       port: 80
       targetPort: 8080
-  type: ClusterIP   # 本地用 tunnel，AWS 自动创建 ELB
+  type: ClusterIP   # use a tunnel locally; AWS creates an ELB automatically

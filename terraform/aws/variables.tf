@@ -1,4 +1,4 @@
-# AWS 基础配置
+# AWS base configuration
 variable "aws_region" {
   description = "AWS region"
   type        = string
@@ -11,7 +11,7 @@ variable "environment" {
   default     = "production"
 }
 
-# EKS 集群配置
+# EKS cluster configuration
 variable "cluster_name" {
   description = "Name of the EKS cluster"
   type        = string
@@ -34,7 +34,7 @@ variable "subnet_ids" {
   type        = list(string)
 }
 
-# CPU 节点组配置
+# CPU node group configuration
 variable "cpu_instance_types" {
   description = "Instance types for CPU node group"
   type        = list(string)
@@ -59,7 +59,7 @@ variable "cpu_desired_size" {
   default     = 2
 }
 
-# GPU 节点组配置
+# GPU node group configuration
 variable "gpu_instance_types" {
   description = "Instance types for GPU node group"
   type        = list(string)
@@ -90,7 +90,7 @@ variable "use_spot_instances" {
   default     = false
 }
 
-# FSx 配置
+# FSx configuration
 variable "enable_fsx" {
   description = "Enable FSx for Lustre file system"
   type        = bool

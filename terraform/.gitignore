@@ -1,39 +1,39 @@
-# Terraform 状态文件（包含敏感信息，绝不提交）
+# Terraform state files (contain sensitive information, never commit)
 *.tfstate
 *.tfstate.*
 *.tfstate.backup
 
-# Terraform 目录
+# Terraform directories
 .terraform/
 .terraform.lock.hcl
 
-# 变量文件（可能包含敏感配置）
+# Variable files (may contain sensitive configuration)
 *.tfvars
 *.tfvars.json
 
-# 覆盖文件
+# Override files
 override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
 
-# CLI 配置文件
+# CLI configuration files
 .terraformrc
 terraform.rc
 
-# 崩溃日志
+# Crash logs
 crash.log
 crash.*.log
 
-# 忽略 kubeconfig 文件
+# Ignore kubeconfig files
 kubeconfig
 kubeconfig_*
 
-# 本地环境变量
+# Local environment variables
 .env
 .env.local
 
-# IDE 配置
+# IDE configuration
 .vscode/
 .idea/
 *.swp
@@ -43,5 +43,5 @@ kubeconfig_*
 # macOS
 .DS_Store
 
-# 备份文件
+# Backup files
 *.bak

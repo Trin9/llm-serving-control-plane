@@ -1,64 +1,64 @@
-# Terraform AWS 环境
+# Terraform AWS Environment
 
-在 AWS 上创建**生产级 EKS 集群**及可选存储（FSx for Lustre）。**不部署应用**，应用由 Helm 部署。
+Create a **production-grade EKS cluster** on AWS plus optional storage (FSx for Lustre). **Applications are not deployed**; they are deployed with Helm.
 
-## 本模块创建的资源
+## Resources Created by This Module
 
-| 资源 | 说明 |
+| Resource | Description |
 |:---|:---|
-| EKS 集群 | 控制平面、CoreDNS、kube-proxy、VPC CNI、EBS CSI |
-| 节点组 | CPU 节点组、GPU 节点组（可选 Spot） |
-| FSx for Lustre（可选） | 大容量共享存储，用于模型等 |
-| StorageClass / PV / PVC（可选） | 与 FSx 配套，供 Pod 挂载 |
+| EKS cluster | Control plane, CoreDNS, kube-proxy, VPC CNI, EBS CSI |
+| Node groups | CPU node group, GPU node group (optional Spot) |
+| FSx for Lustre (optional) | Large shared storage, e.g. for models |
+| StorageClass / PV / PVC (optional) | Pairs with FSx, mounted by Pods |
 
-**不包含**：vLLM Deployment、Gate Service、Ingress、HPA 等，请按 `terraform output next_steps` 使用 Helm 安装。
+**Not included**: vLLM Deployment, Gate Service, Ingress, HPA, etc. — install them with Helm following `terraform output next_steps`.
 
-## 快速开始
+## Quick Start
 
 ```bash
 cd terraform/aws
 
-# 1. 配置 backend（S3）和变量
+# 1. Configure the backend (S3) and variables
 cat > terraform.tfvars <<EOF
 vpc_id     = "vpc-xxxxx"
 subnet_ids = ["subnet-xxxxx", "subnet-yyyyy"]
 use_spot_instances = true
 EOF
 
-# 2. 部署基础设施
+# 2. Deploy the infrastructure
 terraform init
 terraform apply
 
-# 3. 配置 kubectl 并按下一步安装 Helm 应用
+# 3. Configure kubectl and install Helm applications per the next steps
 terraform output kubeconfig_command
 terraform output next_steps
 ```
 
-## 下一步：用 Helm 部署应用
+## Next Step: Deploy Applications with Helm
 
 ```bash
-# 配置 kubectl
+# Configure kubectl
 aws eks update-kubeconfig --region <region> --name <cluster_name>
 kubectl get nodes
 
-# 查看完整指引（安装 Operator、vLLM、Gate 等）
+# View the full guide (install Operator, vLLM, Gate, etc.)
 terraform output next_steps
 ```
 
-按输出中的步骤安装 `helm/llm-operator`、创建 InferenceService、以及（可选）Gate Service 等。
+Follow the steps in the output to install `helm/llm-operator`, create InferenceService, and (optionally) the Gate Service, etc.
 
-## 输出说明
+## Outputs
 
-| 输出 | 说明 |
+| Output | Description |
 |:---|:---|
-| `cluster_name`, `cluster_endpoint` | 集群信息 |
-| `kubeconfig_command` | 配置 kubectl 的命令 |
-| `fsx_info` | FSx 的 id、dns_name、mount_name（enable_fsx=true 时） |
-| `storage_info` | 存储类、PV/PVC 名称、容量 |
-| `next_steps` | Helm 部署步骤说明 |
-| `cost_estimate` | 基础设施月成本估算 |
+| `cluster_name`, `cluster_endpoint` | Cluster information |
+| `kubeconfig_command` | Command to configure kubectl |
+| `fsx_info` | FSx id, dns_name, mount_name (when enable_fsx=true) |
+| `storage_info` | Storage class, PV/PVC names, capacity |
+| `next_steps` | Helm deployment step guide |
+| `cost_estimate` | Estimated monthly infrastructure cost |
 
-## 详细文档
+## Detailed Documentation
 
-- 变量说明、与 Helm 协作、FSx 使用：[使用指南](../../docs/terraform/usage-guide.md)
-- 架构分层：[架构说明](../../docs/architecture.md)
+- Variables, Helm collaboration, FSx usage: [usage guide](../../docs/terraform/usage-guide.md)
+- Architecture layers: [architecture](../../docs/architecture.md)

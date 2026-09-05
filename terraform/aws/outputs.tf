@@ -1,4 +1,4 @@
-# EKS 集群输出
+# EKS cluster outputs
 output "cluster_id" {
   description = "EKS cluster ID"
   value       = module.eks.cluster_id
@@ -30,7 +30,7 @@ output "cluster_certificate_authority_data" {
   sensitive   = true
 }
 
-# 节点组输出
+# Node group outputs
 output "cpu_node_group_id" {
   description = "CPU node group ID"
   value       = module.eks.eks_managed_node_groups["cpu_nodes"].node_group_id
@@ -41,7 +41,7 @@ output "gpu_node_group_id" {
   value       = module.eks.eks_managed_node_groups["gpu_nodes"].node_group_id
 }
 
-# FSx 输出
+# FSx outputs
 output "fsx_info" {
   description = "FSx file system information"
   value = var.enable_fsx ? {
@@ -67,7 +67,7 @@ output "storage_info" {
   }
 }
 
-# 配置命令输出
+# Configuration command outputs
 output "kubeconfig_command" {
   description = "Command to configure kubectl"
   value       = "aws eks update-kubeconfig --region ${var.aws_region} --name ${module.eks.cluster_name}"
@@ -189,7 +189,7 @@ output "next_steps" {
   EOT
 }
 
-# 成本估算提示
+# Cost estimate notes
 output "cost_estimate" {
   description = "Estimated monthly cost breakdown"
   value       = <<-EOT

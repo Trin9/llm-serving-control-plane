@@ -9,11 +9,11 @@ import (
 	"sync"
 )
 
-// Router 定义了 AI 请求的路由策略接口
+// Router defines the routing strategy interface for AI requests.
 type Router interface {
-	// Route 根据请求内容返回一个后端的 URL
+	// Route returns a backend URL based on the request content
 	Route(reqBody []byte) string
-	// UpdateBackends 更新后端 Pod 列表
+	// UpdateBackends updates the list of backend Pods
 	UpdateBackends(urls []string)
 }
 
@@ -23,29 +23,29 @@ type ModelRouteValidator interface {
 	ValidateModelRoute(reqBody []byte) error
 }
 
-// ConsistentHashRouter 实现了一致性哈希路由策略 (W13)
+// ConsistentHashRouter implements a consistent hash routing strategy (W13).
 type ConsistentHashRouter struct {
 	mu       sync.RWMutex
 	backends []string
-	replicas int // 虚拟节点数，用于平滑分布
+	replicas int // number of virtual nodes for smooth distribution
 	nodes    map[uint32]string
 	keys     []uint32
 }
 
-// ModelConsistentHashRouter 将请求按 model 分桶，并对每个模型维护独立的哈希环。
-// 这使得不同模型不会共享同一条全局后端哈希环，保证路由边界清晰，也允许在未来
-// 为每个 model 绑定不同的 backend pool。
+// ModelConsistentHashRouter buckets requests by model and maintains an independent hash ring per model.
+// This keeps different models from sharing a single global backend ring, keeps routing boundaries
+// clear, and allows different backend pools to be bound to each model in the future.
 type ModelConsistentHashRouter struct {
-	mu                     sync.RWMutex
-	defaultRouter          *ConsistentHashRouter
-	modelRouters           map[string]*ConsistentHashRouter
-	modelRoutingEnabled    bool
+	mu                  sync.RWMutex
+	defaultRouter       *ConsistentHashRouter
+	modelRouters        map[string]*ConsistentHashRouter
+	modelRoutingEnabled bool
 }
 
 func NewConsistentHashRouter(urls []string) *ConsistentHashRouter {
 	r := &ConsistentHashRouter{
 		backends: urls,
-		replicas: 50, // 每个真实节点映射 50 个虚拟节点
+		replicas: 50, // map each real node to 50 virtual nodes
 		nodes:    make(map[uint32]string),
 	}
 	r.UpdateBackends(urls)
@@ -55,7 +55,7 @@ func NewConsistentHashRouter(urls []string) *ConsistentHashRouter {
 func NewModelConsistentHashRouter(defaultURLs []string) *ModelConsistentHashRouter {
 	return &ModelConsistentHashRouter{
 		defaultRouter: NewConsistentHashRouter(defaultURLs),
-		modelRouters: make(map[string]*ConsistentHashRouter),
+		modelRouters:  make(map[string]*ConsistentHashRouter),
 	}
 }
 
@@ -180,7 +180,7 @@ func extractModelName(reqBody []byte) string {
 	return normalizeModelKey(body.Model)
 }
 
-// hash 将字符串映射为 uint32
+// hash maps a string to a uint32
 func (r *ConsistentHashRouter) hash(key string) uint32 {
 	h := sha256.New()
 	h.Write([]byte(key))
@@ -188,7 +188,7 @@ func (r *ConsistentHashRouter) hash(key string) uint32 {
 	return uint32(sum[0])<<24 | uint32(sum[1])<<16 | uint32(sum[2])<<8 | uint32(sum[3])
 }
 
-// UpdateBackends 更新并重新构建哈希环
+// UpdateBackends updates and rebuilds the hash ring
 func (r *ConsistentHashRouter) UpdateBackends(urls []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -209,7 +209,7 @@ func (r *ConsistentHashRouter) UpdateBackends(urls []string) {
 	})
 }
 
-// Route 实现逻辑：解析 Prompt 前缀 -> 哈希 -> 选择后端
+// Route implements: extract the prompt prefix -> hash -> select a backend
 func (r *ConsistentHashRouter) Route(reqBody []byte) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -218,10 +218,10 @@ func (r *ConsistentHashRouter) Route(reqBody []byte) string {
 		return ""
 	}
 
-	// 1. 提取语义特征 (Prefix)
+	// 1. Extract the semantic feature (prefix)
 	feature := r.extractFeature(reqBody)
 
-	// 2. 一致性哈希查找
+	// 2. Look up via consistent hashing
 	hash := r.hash(feature)
 	idx := sort.Search(len(r.keys), func(i int) bool {
 		return r.keys[i] >= hash
@@ -234,8 +234,8 @@ func (r *ConsistentHashRouter) Route(reqBody []byte) string {
 	return r.nodes[r.keys[idx]]
 }
 
-// extractFeature 提取 Prompt 的前缀特征用于路由
-// 策略：提取历史对话/上下文（排除最新的提问），以最大化 Prefix Cache 命中率
+// extractFeature extracts a prefix feature from the prompt for routing.
+// Strategy: use prior conversation/context (excluding the latest question) to maximize prefix-cache hit rate.
 func (r *ConsistentHashRouter) extractFeature(reqBody []byte) string {
 	var body struct {
 		Model    string `json:"model"`
@@ -246,7 +246,7 @@ func (r *ConsistentHashRouter) extractFeature(reqBody []byte) string {
 	}
 
 	if err := json.Unmarshal(reqBody, &body); err != nil {
-		return "default" // 解析失败则走默认路由
+		return "default" // fall back to the default route on parse failure
 	}
 
 	feature := body.Model
@@ -254,12 +254,12 @@ func (r *ConsistentHashRouter) extractFeature(reqBody []byte) string {
 	if len(body.Messages) > 0 {
 		var contentBuilder strings.Builder
 
-		// 如果只有一条消息，就用这一条作为特征
+		// If there is only one message, use it as the feature
 		if len(body.Messages) == 1 {
 			contentBuilder.WriteString(body.Messages[0].Content)
 		} else {
-			// 如果有多条消息，拼接除了最后一条（当前新提问）之外的所有历史消息
-			// 这样，同一个多轮对话的后续请求，都会得到相同的特征哈希
+			// With multiple messages, concatenate all prior messages except the last (the current question),
+			// so subsequent turns of the same multi-turn conversation produce the same feature hash.
 			for i := 0; i < len(body.Messages)-1; i++ {
 				contentBuilder.WriteString(body.Messages[i].Role)
 				contentBuilder.WriteString(":")
@@ -269,7 +269,8 @@ func (r *ConsistentHashRouter) extractFeature(reqBody []byte) string {
 		}
 
 		content := contentBuilder.String()
-		// 截取前 200 个字符，避免哈希计算过长，同时也能抓住核心的 System Prompt 和早期历史
+		// Truncate to the first 200 characters to keep hashing fast while still
+		// capturing the core system prompt and early history.
 		if len(content) > 200 {
 			content = content[:200]
 		}

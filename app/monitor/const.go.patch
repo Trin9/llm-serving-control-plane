@@ -2,10 +2,10 @@
 +++ app/monitor/const.go
 @@ -37,6 +37,13 @@
  		},
- 		[]string{"model", "route"}, // 标签：模型名、路由
+ 		[]string{"model", "route"}, // labels: model name, route
  	)
 +
-+	// 模拟的 vLLM 排队请求数 (Gauge)
++	// Mocked vLLM queued request count (Gauge)
 +	VllmRequestsWaiting = prometheus.NewGauge(
 +		prometheus.GaugeOpts{
 +			Name: "vllm:num_requests_waiting",

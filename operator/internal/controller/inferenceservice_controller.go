@@ -24,7 +24,7 @@ import (
 	servingv1 "github.com/trin/llm-serving-control-plane/operator/api/v1"
 )
 
-// 定义 Finalizer 名称
+// Finalizer name
 const finalizerName = "serving.trin.io/finalizer"
 
 // InferenceServiceReconciler reconciles a InferenceService object
@@ -45,7 +45,7 @@ type InferenceServiceReconciler struct {
 func (r *InferenceServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// 1. 获取 InferenceService CR
+	// 1. Fetch the InferenceService CR
 	var inferSvc servingv1.InferenceService
 	if err := r.Get(ctx, req.NamespacedName, &inferSvc); err != nil {
 		if errors.IsNotFound(err) {
@@ -56,27 +56,27 @@ func (r *InferenceServiceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
-	// 2.检查是否正在删除 (DeletionTimestamp 不为空)
+	// 2. Check whether the object is being deleted (DeletionTimestamp is not zero)
 	if !inferSvc.ObjectMeta.DeletionTimestamp.IsZero() {
-		// 如果有我们的 Finalizer，说明需要执行清理
+		// If it has our Finalizer, cleanup needs to be performed
 		if controllerutil.ContainsFinalizer(&inferSvc, finalizerName) {
 			logger.Info("Executing finalizer cleanup...")
 
-			// TODO: 在这里执行外部资源清理 (如 AWS 资源、DNS 等)
-			// 本阶段暂时留空，因为 K8s 资源会自动级联删除
+			// TODO: perform external resource cleanup here (e.g. AWS resources, DNS, etc.)
+			// Intentionally left empty for now, since K8s resources are deleted cascadingly.
 
-			// 移除 Finalizer，允许 K8s 删除对象
+			// Remove the Finalizer so K8s can delete the object
 			controllerutil.RemoveFinalizer(&inferSvc, finalizerName)
 			if err := r.Update(ctx, &inferSvc); err != nil {
 				return ctrl.Result{}, err
 			}
 			logger.Info("Finalizer removed, object can be deleted now")
 		}
-		// 停止 Reconcile
+		// Stop reconciling
 		return ctrl.Result{}, nil
 	}
 
-	// 如果没被删除，确保 Finalizer 存在
+	// If the object is not being deleted, make sure the Finalizer exists
 	if !controllerutil.ContainsFinalizer(&inferSvc, finalizerName) {
 		controllerutil.AddFinalizer(&inferSvc, finalizerName)
 		if err := r.Update(ctx, &inferSvc); err != nil {
@@ -86,7 +86,7 @@ func (r *InferenceServiceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	logger.Info("Reconciling InferenceService", "name", inferSvc.Name, "namespace", inferSvc.Namespace)
 
-	// 3. 同步 Deployment
+	// 3. Reconcile the Deployment
 	if err := r.reconcileDeployment(ctx, &inferSvc); err != nil {
 		logger.Error(err, "Failed to reconcile Deployment")
 		_ = r.updateLifecycleStatus(ctx, &inferSvc, lifecycleState{
@@ -101,40 +101,40 @@ func (r *InferenceServiceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
-	// 4. 同步 Service
+	// 4. Reconcile the Service
 	if err := r.reconcileService(ctx, &inferSvc); err != nil {
 		logger.Error(err, "Failed to reconcile Service")
 		return ctrl.Result{}, err
 	}
 
-	// 5. 更新 Status (根据真实状态)
+	// 5. Update the Status (based on the real state)
 	if err := r.updateStatus(ctx, &inferSvc); err != nil {
 		logger.Error(err, "Failed to update status")
 		return ctrl.Result{}, err
 	}
 
 	logger.Info("Successfully reconciled InferenceService")
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // 定期 Requeue 以检查状态变化
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // requeue periodically to check for state changes
 }
 
-// reconcileDeployment 确保 Deployment 存在且与 CR 期望状态一致
+// reconcileDeployment ensures the Deployment exists and matches the desired state from the CR.
 func (r *InferenceServiceReconciler) reconcileDeployment(ctx context.Context, inferSvc *servingv1.InferenceService) error {
 	logger := log.FromContext(ctx)
 
-	// 构建期望的 Deployment
+	// Build the desired Deployment
 	deployment := r.buildDeployment(inferSvc)
 
-	// 设置 Owner Reference，实现级联删除
+	// Set the Owner Reference to enable cascading deletion
 	if err := ctrl.SetControllerReference(inferSvc, deployment, r.Scheme); err != nil {
 		return err
 	}
 
-	// 检查 Deployment 是否已存在
+	// Check whether the Deployment already exists
 	var existing appsv1.Deployment
 	err := r.Get(ctx, client.ObjectKeyFromObject(deployment), &existing)
 
 	if err != nil && errors.IsNotFound(err) {
-		// 不存在，创建新的 Deployment
+		// Not found: create a new Deployment
 		logger.Info("Creating Deployment", "name", deployment.Name)
 		return r.Create(ctx, deployment)
 	} else if err != nil {
@@ -166,7 +166,7 @@ func (r *InferenceServiceReconciler) reconcileDeployment(ctx context.Context, in
 	return r.Update(ctx, &existing)
 }
 
-// buildDeployment 根据 InferenceService 构建 Deployment 对象
+// buildDeployment builds a Deployment object from the InferenceService.
 func (r *InferenceServiceReconciler) buildDeployment(inferSvc *servingv1.InferenceService) *appsv1.Deployment {
 	modelName := strings.TrimSpace(inferSvc.Spec.ModelName)
 	modelLabel := normalizeModelLabelValue(modelName)
@@ -180,7 +180,7 @@ func (r *InferenceServiceReconciler) buildDeployment(inferSvc *servingv1.Inferen
 		"app.kubernetes.io/part-of":        "llm-serving-control-plane",
 	}
 
-	// 默认副本数为 1
+	// Default to 1 replica
 	replicas := int32(1)
 	if inferSvc.Spec.Replicas != nil {
 		replicas = *inferSvc.Spec.Replicas
@@ -188,7 +188,7 @@ func (r *InferenceServiceReconciler) buildDeployment(inferSvc *servingv1.Inferen
 
 	profile := resourceProfileFor(inferSvc.Spec.ResourceProfile)
 
-	// 扩缩容可能重建 Recreate 策略下的 GPU Pod；GPU 调度必须精确到节点。
+	// Scaling may rebuild GPU Pods under the Recreate strategy; GPU scheduling must be node-precise.
 	strategy := appsv1.DeploymentStrategy{
 		Type: appsv1.RecreateDeploymentStrategyType,
 	}
@@ -227,15 +227,16 @@ func (r *InferenceServiceReconciler) buildDeployment(inferSvc *servingv1.Inferen
 	}
 }
 
-// resourceProfile 描述一个 ResourceProfile 生成的资源与调度约束。
+// resourceProfile describes the resources and scheduling constraints generated by a ResourceProfile.
 type resourceProfile struct {
 	gpu    int64
 	cpu    string
 	memory string
 }
 
-// resourceProfileFor 将 InferenceService.spec.resourceProfile 翻译为 Pod 所需资源和调度配置。
-// 默认 gpu-small；gpu-medium/gpu-large 增加 CPU/内存与 GPU 数量；cpu-only 用于无 GPU 的 mock/本地引擎。
+// resourceProfileFor translates InferenceService.spec.resourceProfile into the Pod's resource and
+// scheduling configuration. Defaults to gpu-small; gpu-medium/gpu-large increase CPU/memory and the
+// GPU count; cpu-only is used for GPU-free mock/local engines.
 func resourceProfileFor(profile string) resourceProfile {
 	switch strings.TrimSpace(profile) {
 	case "gpu-large":
@@ -265,22 +266,22 @@ func resourceProfileFor(profile string) resourceProfile {
 	}
 }
 
-// buildContainer 根据 InferenceService 构建 Container
+// buildContainer builds a Container from the InferenceService.
 func (r *InferenceServiceReconciler) buildContainer(inferSvc *servingv1.InferenceService, profile resourceProfile) corev1.Container {
 	engine := inferSvc.Spec.Engine
 	if engine == "" {
-		engine = "vllm" // 默认值
+		engine = "vllm" // default value
 	}
 
-	// 获取引擎配置（镜像和参数）
+	// Get the engine configuration (image and arguments)
 	image, args := r.getEngineConfig(engine, inferSvc.Spec.ModelName)
 
-	// 如果用户指定了自定义镜像，使用用户的镜像
+	// If the user specified a custom image, use theirs
 	if inferSvc.Spec.Image != "" {
 		image = inferSvc.Spec.Image
 	}
 
-	// 设置 ImagePullPolicy
+	// Set ImagePullPolicy
 	pullPolicy := corev1.PullIfNotPresent
 	switch inferSvc.Spec.ImagePullPolicy {
 	case "Always":
@@ -303,7 +304,7 @@ func (r *InferenceServiceReconciler) buildContainer(inferSvc *servingv1.Inferenc
 	}
 	if profile.gpu > 0 {
 		resources.Limits[corev1.ResourceName("nvidia.com/gpu")] = resourceMustParse(fmt.Sprintf("%d", profile.gpu))
-		// 请求和限制保持一致，避免 GPU 过量承诺
+		// Keep requests and limits equal to avoid GPU overcommitment
 		resources.Requests[corev1.ResourceName("nvidia.com/gpu")] = resourceMustParse(fmt.Sprintf("%d", profile.gpu))
 	}
 
@@ -343,7 +344,7 @@ func resourceMustParse(value string) resource.Quantity {
 	return q
 }
 
-// getEngineConfig 根据引擎类型返回默认镜像和启动参数
+// getEngineConfig returns the default image and launch arguments for the given engine type.
 func (r *InferenceServiceReconciler) getEngineConfig(engine, modelName string) (string, []string) {
 	switch engine {
 	case "vllm":
@@ -353,29 +354,29 @@ func (r *InferenceServiceReconciler) getEngineConfig(engine, modelName string) (
 			"--port", "8000",
 		}
 	case "triton":
-		// Triton Inference Server 示例配置
+		// Example Triton Inference Server configuration
 		return "nvcr.io/nvidia/tritonserver:latest", []string{
 			"tritonserver",
 			"--model-repository=/models",
 			"--http-port=8000",
 		}
 	case "tgi":
-		// Text Generation Inference (HuggingFace) 示例配置
+		// Example Text Generation Inference (HuggingFace) configuration
 		return "ghcr.io/huggingface/text-generation-inference:latest", []string{
 			"--model-id", modelName,
 			"--port", "8000",
 		}
 	case "tensorrt":
-		// TensorRT-LLM 示例配置
+		// Example TensorRT-LLM configuration
 		return "nvcr.io/nvidia/tensorrt-llm:latest", []string{
 			"--model", modelName,
 			"--port", "8000",
 		}
 	case "mock":
-		// Mock 引擎，用于本地测试（无需 GPU）
+		// Mock engine for local testing (no GPU required)
 		return "mock-vllm:latest", nil
 	default:
-		// 默认使用 vLLM
+		// Default to vLLM
 		return "vllm/vllm-openai:latest", []string{
 			"--model", modelName,
 			"--host", "0.0.0.0",
@@ -384,24 +385,24 @@ func (r *InferenceServiceReconciler) getEngineConfig(engine, modelName string) (
 	}
 }
 
-// reconcileService 确保 Service 存在且与 CR 期望状态一致
+// reconcileService ensures the Service exists and matches the desired state from the CR.
 func (r *InferenceServiceReconciler) reconcileService(ctx context.Context, inferSvc *servingv1.InferenceService) error {
 	logger := log.FromContext(ctx)
 
-	// 构建期望的 Service
+	// Build the desired Service
 	service := r.buildService(inferSvc)
 
-	// 设置 Owner Reference
+	// Set the Owner Reference
 	if err := ctrl.SetControllerReference(inferSvc, service, r.Scheme); err != nil {
 		return err
 	}
 
-	// 检查 Service 是否已存在
+	// Check whether the Service already exists
 	var existing corev1.Service
 	err := r.Get(ctx, client.ObjectKeyFromObject(service), &existing)
 
 	if err != nil && errors.IsNotFound(err) {
-		// 不存在，创建新的 Service
+		// Not found: create a new Service
 		logger.Info("Creating Service", "name", service.Name)
 		return r.Create(ctx, service)
 	} else if err != nil {
@@ -422,7 +423,7 @@ func (r *InferenceServiceReconciler) reconcileService(ctx context.Context, infer
 	return r.Update(ctx, &existing)
 }
 
-// buildService 根据 InferenceService 构建 Service 对象
+// buildService builds a Service object from the InferenceService.
 func (r *InferenceServiceReconciler) buildService(inferSvc *servingv1.InferenceService) *corev1.Service {
 	modelName := strings.TrimSpace(inferSvc.Spec.ModelName)
 	modelLabel := normalizeModelLabelValue(modelName)
@@ -457,7 +458,7 @@ func (r *InferenceServiceReconciler) buildService(inferSvc *servingv1.InferenceS
 	}
 }
 
-// updateStatus 更新 InferenceService 的 Status
+// normalizeModelLabelValue converts a model name into a valid Kubernetes label value.
 func normalizeModelLabelValue(modelName string) string {
 	trimmed := strings.TrimSpace(modelName)
 	if trimmed == "" {
@@ -495,8 +496,9 @@ func normalizeModelLabelValue(modelName string) string {
 	return result
 }
 
+// updateStatus updates the Status of the InferenceService based on the actual Deployment/Pod state.
 func (r *InferenceServiceReconciler) updateStatus(ctx context.Context, inferSvc *servingv1.InferenceService) error {
-	// 1. 获取关联的 Deployment 状态
+	// 1. Fetch the state of the associated Deployment
 	var deployment appsv1.Deployment
 	err := r.Get(ctx, client.ObjectKey{
 		Name:      inferSvc.Name,
@@ -527,11 +529,11 @@ func (r *InferenceServiceReconciler) updateStatus(ctx context.Context, inferSvc 
 		return err
 	}
 
-	// 2. 更新 Service URL
+	// 2. Update the Service URL
 	serviceURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:8000", inferSvc.Name, inferSvc.Namespace)
 	inferSvc.Status.URL = serviceURL
 
-	// 3. 根据 Deployment 状态判断 Ready
+	// 3. Determine readiness based on the Deployment state
 	replicas := int32(1)
 	if inferSvc.Spec.Replicas != nil {
 		replicas = *inferSvc.Spec.Replicas
@@ -683,8 +685,8 @@ func (r *InferenceServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorderFor("inferenceservice-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&servingv1.InferenceService{}).
-		Owns(&appsv1.Deployment{}). // 监听 Deployment 变化
-		Owns(&corev1.Service{}).    // 监听 Service 变化
+		Owns(&appsv1.Deployment{}). // watch Deployment changes
+		Owns(&corev1.Service{}).    // watch Service changes
 		Named("inferenceservice").
 		Complete(r)
 }

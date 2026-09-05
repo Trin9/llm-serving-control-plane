@@ -11,10 +11,10 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   csi:
     driver: fsx.csi.aws.com
-    volumeHandle: ${FSX_ID}  # 替换具体的 ID
+    volumeHandle: ${FSX_ID}  # replace with the actual ID
     volumeAttributes:
       mountname: "vpre3bev"
-      dnsname: "${FSX_ID}.fsx.ap-northeast-1.amazonaws.com" # 修改 DNS
+      dnsname: "${FSX_ID}.fsx.ap-northeast-1.amazonaws.com" # update the DNS
       region: "ap-northeast-1"
   nodeAffinity:
     required:
@@ -22,4 +22,4 @@ spec:
       - matchExpressions:
         - key: topology.fsx.csi.aws.com/zone
           operator: In
-          values: ["ap-northeast-1d"] # 必须匹配集群 YAML 中的 AZ
+          values: ["ap-northeast-1d"] # must match the AZ in the cluster YAML

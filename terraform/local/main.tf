@@ -29,7 +29,7 @@ provider "kubernetes" {
 
 provider "null" {}
 
-# 创建本地 Kind 集群
+# Create a local Kind cluster
 resource "kind_cluster" "local" {
   name = var.cluster_name
   wait_for_ready = true
@@ -101,7 +101,7 @@ resource "null_resource" "wait_for_api" {
   }
 }
 
-# 创建本地 PersistentVolume (hostPath)
+# Create a local PersistentVolume (hostPath)
 resource "kubernetes_persistent_volume" "model_storage" {
   metadata {
     name = "model-pv"
@@ -114,7 +114,7 @@ resource "kubernetes_persistent_volume" "model_storage" {
     
     access_modes = ["ReadWriteMany"]
     persistent_volume_reclaim_policy = "Retain"
-    storage_class_name = "manual"  # 显式设置，避免 Kind 自动分配默认 StorageClass
+    storage_class_name = "manual"  # set explicitly to prevent Kind from assigning a default StorageClass
     
     persistent_volume_source {
       host_path {
@@ -127,7 +127,7 @@ resource "kubernetes_persistent_volume" "model_storage" {
   depends_on = [null_resource.wait_for_api]
 }
 
-# 创建 PersistentVolumeClaim
+# Create a PersistentVolumeClaim
 resource "kubernetes_persistent_volume_claim" "model_storage" {
   metadata {
     name      = "model-pvc"
@@ -136,7 +136,7 @@ resource "kubernetes_persistent_volume_claim" "model_storage" {
   
   spec {
     access_modes = ["ReadWriteMany"]
-    storage_class_name = "manual"  # 与 PV 匹配，显式设置以避免默认 SC 干扰
+    storage_class_name = "manual"  # matches the PV; set explicitly to avoid default StorageClass interference
     
     resources {
       requests = {

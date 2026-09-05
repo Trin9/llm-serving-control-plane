@@ -13,13 +13,13 @@ terraform {
   }
   
   backend "s3" {
-    # 使用前需要配置：
+    # Configure this before use:
     # bucket = "your-terraform-state-bucket"
     # key    = "gate-service/terraform.tfstate"
     # region = "ap-northeast-1"
     # 
-    # 或者暂时使用 local backend (不推荐生产环境)：
-    # 注释掉上面的 s3 配置，取消下面的注释
+    # Or temporarily use a local backend (not recommended for production):
+    # Comment out the s3 configuration above and uncomment the block below
     # backend "local" {
     #   path = "terraform.tfstate"
     # }
@@ -40,7 +40,7 @@ provider "kubernetes" {
   token                  = data.aws_eks_cluster_auth.cluster.token
 }
 
-# EKS 集群
+# EKS cluster
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 19.0"
@@ -51,7 +51,7 @@ module "eks" {
   vpc_id     = var.vpc_id
   subnet_ids = var.subnet_ids
 
-  # 启用 EKS 插件
+  # Enable EKS add-ons
   cluster_addons = {
     coredns = {
       most_recent = true
@@ -67,7 +67,7 @@ module "eks" {
     }
   }
 
-  # CPU 节点组
+  # CPU node group
   eks_managed_node_groups = {
     cpu_nodes = {
       name = "${var.cluster_name}-cpu"
@@ -89,7 +89,7 @@ module "eks" {
       }
     }
 
-    # GPU 节点组
+    # GPU node group
     gpu_nodes = {
       name = "${var.cluster_name}-gpu"
       
@@ -100,7 +100,7 @@ module "eks" {
       max_size     = var.gpu_max_size
       desired_size = var.gpu_desired_size
       
-      # GPU 污点，确保只有需要 GPU 的 Pod 才会调度到这些节点
+      # GPU taint: ensure only Pods that need a GPU are scheduled to these nodes
       taints = [{
         key    = "nvidia.com/gpu"
         value  = "true"
@@ -126,7 +126,7 @@ module "eks" {
   }
 }
 
-# FSx for Lustre 文件系统 (用于存储大模型)
+# FSx for Lustre file system (used to store large models)
 resource "aws_fsx_lustre_file_system" "model_storage" {
   count = var.enable_fsx ? 1 : 0
 
@@ -137,7 +137,7 @@ resource "aws_fsx_lustre_file_system" "model_storage" {
 
   security_group_ids = [aws_security_group.fsx[0].id]
 
-  # 关联 S3 存储桶
+  # Link an S3 bucket
   data_repository_associations {
     s3_bucket = var.fsx_s3_bucket
     import_path = "s3://${var.fsx_s3_bucket}"
@@ -151,7 +151,7 @@ resource "aws_fsx_lustre_file_system" "model_storage" {
   }
 }
 
-# FSx 安全组
+# FSx security group
 resource "aws_security_group" "fsx" {
   count = var.enable_fsx ? 1 : 0
   
@@ -186,7 +186,7 @@ data "aws_subnet" "fsx_subnet" {
   id    = var.subnet_ids[0]
 }
 
-# 安装 FSx CSI Driver
+# Install the FSx CSI Driver
 resource "kubernetes_storage_class" "fsx" {
   count = var.enable_fsx ? 1 : 0
   

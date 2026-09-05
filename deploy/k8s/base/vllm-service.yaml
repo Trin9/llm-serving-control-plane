@@ -1,10 +1,10 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: vllm-qwen-service # Gate Service 调用的固定域名
+  name: vllm-qwen-service # fixed DNS name used by the Gate Service
 spec:
   selector:
-    app: vllm-qwen # 本地和 AWS 的 Pod 都必须带这个标签
+    app: vllm-qwen # local and AWS Pods must all carry this label
   ports:
     - protocol: TCP
       port: 8000

@@ -10,8 +10,8 @@ spec:
     name: qwen-service
   minReplicaCount: 1
   maxReplicaCount: 5
-  cooldownPeriod: 300 # 5分钟冷却时间，大模型权重加载慢，避免频繁启停 (防抖)
-  pollingInterval: 15 # 每15秒轮询一次指标
+  cooldownPeriod: 300 # 5-minute cooldown: large model weights load slowly, so avoid frequent start/stop (debounce)
+  pollingInterval: 15 # poll metrics every 15 seconds
   triggers:
   - type: prometheus
     metadata:

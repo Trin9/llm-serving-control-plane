@@ -2,7 +2,7 @@ name: Docker CI/CD for Gate Service
 on:
   push:
     branches:
-      - main # 只有推送到 main 分支时触发
+      - main # only triggers on pushes to the main branch
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
@@ -23,7 +23,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # !! 重点：将下面的 'gate-service' 替换为在 Docker Hub 上的实际仓库名称
+          # !! IMPORTANT: replace 'gate-service' below with your actual Docker Hub repository name
           images: ${{ secrets.DOCKER_USERNAME }}/gate-service 
           tags: |
             latest

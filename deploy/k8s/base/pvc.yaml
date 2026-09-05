@@ -5,7 +5,7 @@ metadata:
 spec:
   accessModes:
     - ReadWriteMany
-  storageClassName: "" # 留空，由具体 PV 决定
+  storageClassName: "" # leave empty; determined by the specific PV
   resources:
     requests:
       storage: 100Gi

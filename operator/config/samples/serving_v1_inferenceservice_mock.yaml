@@ -1,4 +1,4 @@
-# 本地测试示例 - 使用 mock 引擎（无需 GPU）
+# Local test sample - uses the mock engine (no GPU required)
 apiVersion: serving.trin.io/v1
 kind: InferenceService
 metadata:

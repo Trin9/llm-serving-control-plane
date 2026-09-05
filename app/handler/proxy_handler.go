@@ -20,15 +20,15 @@ import (
 	"github.com/google/uuid"
 )
 
-// lineBufferPool 用于复用 bytes.Buffer，减少 GC 压力（内存优化 W11）
-// 在高并发长连接场景下，避免频繁分配新的字节切片
+// lineBufferPool reuses bytes.Buffer instances to reduce GC pressure (memory optimization W11).
+// It avoids repeatedly allocating new byte slices in high-concurrency, long-lived connection scenarios.
 var lineBufferPool = sync.Pool{
 	New: func() interface{} {
-		return bytes.NewBuffer(make([]byte, 0, 8192)) // 8KB 初始缓冲
+		return bytes.NewBuffer(make([]byte, 0, 8192)) // 8KB initial buffer
 	},
 }
 
-// TokenStats 用于跟踪流式响应中的 token 统计信息
+// TokenStats tracks token statistics across a streaming response.
 type TokenStats struct {
 	model            string
 	route            string
@@ -41,7 +41,7 @@ type TokenStats struct {
 	firstTokenFound  bool
 }
 
-// NewTokenStats 创建一个新的 TokenStats 实例
+// NewTokenStats creates a new TokenStats instance.
 func NewTokenStats(model, route string) *TokenStats {
 	return &TokenStats{
 		model:     model,
@@ -50,35 +50,35 @@ func NewTokenStats(model, route string) *TokenStats {
 	}
 }
 
-// ProcessFirstToken 处理第一个 token，记录时间并计算 TTFT
+// ProcessFirstToken handles the first token: it records the time and computes TTFT.
 func (ts *TokenStats) ProcessFirstToken() {
 	if !ts.firstTokenFound {
 		ts.firstTokenFound = true
 		ts.firstTokenTime = time.Now()
 
-		// 计算 TTFT 并记录指标
+		// Compute TTFT and record the metric
 		ttft := ts.firstTokenTime.Sub(ts.startTime).Seconds()
 		monitor.AITimeToFirstToken.WithLabelValues(ts.model, ts.route).Observe(ttft)
 	}
 }
 
-// IncrementTokenCount 增加 token 计数
+// IncrementTokenCount increments the token count.
 func (ts *TokenStats) IncrementTokenCount() {
 	ts.tokenCount++
 }
 
-// RecordTPOT 在流结束时记录 TPOT 指标
+// RecordTPOT records the TPOT metric at the end of the stream.
 func (ts *TokenStats) RecordTPOT() {
 	if ts.firstTokenFound && ts.tokenCount > 1 {
 		endTime := time.Now()
 
-		// 计算总的有效 token 生成时间（排除首字时间）
+		// Compute total effective token generation time (excluding the time to first token)
 		totalTokenTime := endTime.Sub(ts.firstTokenTime).Seconds()
 
-		// 计算 TPOT（Time Per Output Token）- 排除第一个 token
+		// Compute TPOT (time per output token) - excludes the first token
 		tpot := totalTokenTime / float64(ts.tokenCount-1)
 
-		// 记录 TPOT 指标
+		// Record the TPOT metric
 		monitor.AITimePerOutputToken.WithLabelValues(ts.model, ts.route).Observe(tpot)
 	}
 }
@@ -112,12 +112,13 @@ func PhaseSSEDataAndReport(line []byte, stats *TokenStats) bool {
 	if strings.HasPrefix(lineStr, "data: ") {
 		_, dataContent, _ := strings.Cut(lineStr, "data: ")
 
-		// 优化点：先快速检查是否包含 "usage" 字段（字符串匹配比 JSON 解析快得多）
+		// Optimization: first quickly check whether the "usage" field is present
+		// (string matching is far faster than JSON parsing)
 		if strings.Contains(dataContent, `"usage"`) {
-			// 只有包含 usage 的最后一个 Chunk 才做完整 JSON 解析
+			// Only the final chunk containing "usage" is fully parsed as JSON
 			var sseData map[string]any
 			if err := json.Unmarshal([]byte(dataContent), &sseData); err == nil {
-				// 提取官方 token 统计（如果存在）
+				// Extract official token statistics if present
 				if usage, ok := sseData["usage"].(map[string]any); ok {
 					if promptTokens, ok := usage["prompt_tokens"].(float64); ok {
 						stats.promptTokens = int(promptTokens)
@@ -126,7 +127,7 @@ func PhaseSSEDataAndReport(line []byte, stats *TokenStats) bool {
 						stats.completionTokens = int(completionTokens)
 					}
 					if totalTokens, ok := usage["total_tokens"].(float64); ok {
-						// 使用官方统计覆盖手动计数（更准确）
+						// Override manual counting with the official stats (more accurate)
 						stats.tokenCount = int(totalTokens)
 					} else if stats.completionTokens > 0 {
 						stats.tokenCount = stats.promptTokens + stats.completionTokens
@@ -136,19 +137,19 @@ func PhaseSSEDataAndReport(line []byte, stats *TokenStats) bool {
 			} else {
 				fmt.Printf("⚠️ WARN: Failed to parse SSE data with usage: %v, content: %s\n", err, dataContent)
 			}
-			// 不返回 true，因为这是最后一个 Chunk，不需要继续处理
+			// Do not return true: this is the final chunk and needs no further processing
 		} else if !strings.Contains(dataContent, "[DONE]") {
-			// 对于普通数据行，只做轻量级检查，不解析 JSON
-			// 快速检查是否有 choices 字段（字符串级别）
+			// For regular data lines, only do a lightweight check without parsing JSON
+			// Quickly check for a "choices" field (string level)
 			if strings.Contains(dataContent, `"choices"`) {
-				// 这是一个有效的 token 数据，增加计数
+				// Valid token data; increment the counter
 				stats.IncrementTokenCount()
 				if stats.usageSource == "" {
 					stats.usageSource = "estimated"
 				}
 
 				if !stats.firstTokenFound {
-					// 处理第一个 token
+					// Handle the first token
 					stats.ProcessFirstToken()
 				}
 
@@ -218,8 +219,8 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 		// Create TokenStats instance for metrics tracking
 		stats := NewTokenStats(model, c.Request.URL.Path)
 
-		// B. 构建发往 vLLM 的请求
-		// 使用路由选择的 targetURL
+		// B. Build the request to vLLM
+		// Use the target URL selected by the router
 		proxyReq, err := http.NewRequestWithContext(c.Request.Context(), "POST", targetURL, bytes.NewBuffer(bodyBytes))
 		if err != nil {
 			fmt.Printf("🔥 CRITICAL ERROR: %v\n", err)
@@ -230,41 +231,41 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 		if upstreamAPIKey := strings.TrimSpace(os.Getenv("VLLM_API_KEY")); upstreamAPIKey != "" {
 			proxyReq.Header.Set("Authorization", "Bearer "+upstreamAPIKey)
 		}
-		proxyReq.Header.Set("X-Request-ID", requestID) // 将 Request ID 传递给上游
-		proxyReq.Header.Set("X-Trace-ID", traceID)     // 将 Trace ID 传递给上游
+		proxyReq.Header.Set("X-Request-ID", requestID) // pass the Request ID upstream
+		proxyReq.Header.Set("X-Trace-ID", traceID)     // pass the Trace ID upstream
 
-		// C. 发送请求
+		// C. Send the request
 		client := &http.Client{
-			Timeout: 300 * time.Second, // 设置一个合理的超时时间，例如 300 秒 (5 分钟)
+			Timeout: 300 * time.Second, // set a reasonable timeout, e.g. 300 seconds (5 minutes)
 		}
 		resp, err := client.Do(proxyReq)
 		if err != nil {
-			// 处理 Context Cancelled 导致的错误 (客户端断开连接或网关超时)
+			// Handle errors caused by a cancelled context (client disconnect or gateway timeout)
 			if c.Request.Context().Err() == context.Canceled {
 				fmt.Printf("👋 Client disconnected or context cancelled: %v\n", err)
-				c.Status(http.StatusRequestTimeout) // 返回 408 Request Timeout 或 499 Client Closed Request
+				c.Status(http.StatusRequestTimeout) // return 408 Request Timeout / 499 Client Closed Request
 				return
 			}
-			// 其他上游错误
+			// Other upstream errors
 			fmt.Printf("🔥 Upstream request failed: %v\n", err)
 			c.JSON(http.StatusBadGateway, gin.H{"error": "Upstream service error", "details": err.Error()})
 			return
 		}
 		defer resp.Body.Close()
 
-		// D. 处理响应
-		// 统一设置响应头
-		// 避免重复设置和语义冲突
+		// D. Handle the response
+		// Set response headers uniformly
+		// to avoid duplicate headers and semantic conflicts
 		for header, values := range resp.Header {
 			for _, value := range values {
 				c.Writer.Header().Add(header, value)
 			}
 		}
 
-		// 保留我们自己设置的 X-Request-ID header (防止被上游覆盖)
+		// Keep our own X-Request-ID header (prevent it from being overwritten upstream)
 		c.Writer.Header().Set("X-Request-ID", requestID)
 
-		// 如果上游返回非 2xx 状态码，直接透传
+		// Pass through directly if the upstream returns a non-2xx status code
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			c.Writer.WriteHeader(resp.StatusCode)
 			_, err = io.Copy(c.Writer, resp.Body)
@@ -274,30 +275,30 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 			return
 		}
 
-		// 对于 2xx 成功响应，且是 SSE 流，设置额外的流式响应头
-		// 修正 SSE 响应头和 chunked 行为，避免重复设置
+		// For successful 2xx SSE streams, add extra streaming response headers.
+		// Fix SSE headers and chunked behavior to avoid setting them twice.
 		if strings.Contains(resp.Header.Get("Content-Type"), "event-stream") {
 			c.Writer.Header().Set("Cache-Control", "no-cache")
 			c.Writer.Header().Set("Connection", "keep-alive")
-			c.Writer.Header().Set("Transfer-Encoding", "chunked") // 明确表示使用 chunked 传输
+			c.Writer.Header().Set("Transfer-Encoding", "chunked") // explicitly enable chunked transfer
 		}
 
-		c.Writer.WriteHeader(resp.StatusCode) // 写入上游的 2xx 状态码
+		c.Writer.WriteHeader(resp.StatusCode) // write the upstream 2xx status code
 
-		// E. 核心循环：读取 vLLM 的流，实时写回 Client
-		// 使用 32KB Reader 缓冲减少系统调用次数
+		// E. Core loop: read the vLLM stream and write it back to the client in real time
+		// Use a 32KB reader buffer to reduce syscall count
 		reader := bufio.NewReaderSize(resp.Body, 32*1024)
 		requestStatus := "completed"
 
 		for {
-			// 使用 ReadBytes('\n') 确保每次读取都是完整的一行
-			// 这样 PhaseSSEDataAndReport 才能准确识别 "data: " 前缀和 "usage" 字段
+			// Use ReadBytes('\n') so each read returns a complete line.
+			// This lets PhaseSSEDataAndReport accurately detect the "data: " prefix and "usage" field.
 			line, err := reader.ReadBytes('\n')
 			if err != nil {
 				if err != io.EOF {
 					fmt.Printf("🔥 ERROR reading from vLLM: %v\n", err)
 				}
-				// 处理最后可能剩下的数据（如果没有以 \n 结尾）
+				// Handle any trailing data (if the stream did not end with \n)
 				if len(line) > 0 {
 					PhaseSSEDataAndReport(line, stats)
 					if _, wErr := c.Writer.Write(line); wErr != nil {
@@ -312,17 +313,17 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 				continue
 			}
 
-			// 检查 SSE 数据行并处理指标统计
+			// Inspect the SSE data line and update metric statistics
 			PhaseSSEDataAndReport(line, stats)
 
-			// 实时写回 Client
+			// Write back to the client in real time
 			_, err = c.Writer.Write(line)
 			if err != nil {
-				// 客户端断开连接
+				// Client disconnected
 				requestStatus = "client_disconnected"
 				break
 			}
-			c.Writer.Flush() // 关键！必须立即刷新缓冲区，否则前端看不到打字机效果
+			c.Writer.Flush() // critical: flush immediately, otherwise the frontend won't see the streaming (typewriter) effect
 		}
 
 		// Stream finished, record TPOT metrics
@@ -362,18 +363,18 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 	}
 }
 
-// 💡 修改 HealthCheckHandler 以接受 *gin.Context
-func HealthCheckHandler(c *gin.Context) { // 注意：参数现在是 c *gin.Context
-	// Gin 框架中，我们不再直接使用 w http.ResponseWriter 和 r *http.Request
-	// 而是通过 c.Writer 和 c.Request 来访问它们，但通常不需要直接操作它们。
+// 💡 HealthCheckHandler uses *gin.Context.
+func HealthCheckHandler(c *gin.Context) { // note: the parameter is now c *gin.Context
+	// In Gin we no longer use w http.ResponseWriter and r *http.Request directly.
+	// They are accessed via c.Writer and c.Request, but usually there is no need to manipulate them directly.
 
-	// 使用 Gin 推荐的 c.String() 或 c.JSON() 方法来返回响应
-	// 这样它会自动设置状态码和响应头
+	// Use Gin's recommended c.String() or c.JSON() methods to return a response.
+	// They set the status code and response headers automatically.
 	c.String(http.StatusOK, "Status: OK")
 
-	// 如果想要返回 JSON:
+	// To return JSON:
 	// c.JSON(http.StatusOK, gin.H{"status": "ok"})
 
 	// log.Println("Health check accessed.")
-	// 注意：Gin 默认集成了 Logger 中间件，日志记录会更自动化
+	// Note: Gin ships with a Logger middleware by default, so logging is handled automatically.
 }

@@ -37,7 +37,7 @@ func getLimiter(userID string) *rate.Limiter {
 		return l.(*rate.Limiter)
 	}
 
-	// 每秒允许 1000 个请求，桶容量 2000 (针对压测放宽限制)
+	// Allow 1000 requests per second with a bucket capacity of 2000 (relaxed for load testing)
 	newLimiter := rate.NewLimiter(rate.Limit(1000), 2000)
 	actual, _ := limiters.LoadOrStore(userID, newLimiter)
 	return actual.(*rate.Limiter)
