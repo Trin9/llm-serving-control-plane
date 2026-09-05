@@ -8,8 +8,8 @@ metadata:
   name: mock-service
 spec:
   modelName: "mock-model"
-  replicas: 2
-  # engine: "mock"  # 使用 mock 引擎，无需 GPU
+  replicas: 1
+  engine: "mock"
   image: "mock-vllm:latest"
   imagePullPolicy: IfNotPresent
   resourceProfile: "cpu-only"

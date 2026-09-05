@@ -373,10 +373,7 @@ func (r *InferenceServiceReconciler) getEngineConfig(engine, modelName string) (
 		}
 	case "mock":
 		// Mock 引擎，用于本地测试（无需 GPU）
-		// 使用 Python 内置 HTTP 服务器模拟推理服务
-		return "python:3.9-alpine", []string{
-			"python", "-m", "http.server", "8000",
-		}
+		return "mock-vllm:latest", nil
 	default:
 		// 默认使用 vLLM
 		return "vllm/vllm-openai:latest", []string{

@@ -39,7 +39,7 @@ echo -e "${GREEN}✓ 依赖检查通过${NC}\n"
 # 2. 编译代码
 echo -e "${YELLOW}[2/10] 编译 Operator 代码...${NC}"
 cd "$(dirname "$0")"
-go build ./...
+GOTOOLCHAIN=auto go build ./...
 if [ $? -ne 0 ]; then
     echo -e "${RED}✗ 编译失败${NC}"
     exit 1
@@ -89,7 +89,7 @@ fi
 
 # 使用环境变量指定端口（如果 Controller 支持）
 export METRICS_BIND_ADDRESS=:8081
-go run ./cmd/main.go > /tmp/controller.log 2>&1 &
+GOTOOLCHAIN=auto go run ./cmd/main.go > /tmp/controller.log 2>&1 &
 CONTROLLER_PID=$!
 sleep 5  # 等待 Controller 启动
 
@@ -102,30 +102,16 @@ if ! ps -p $CONTROLLER_PID > /dev/null; then
 fi
 echo -e "${GREEN}✓ Controller 运行中 (PID: $CONTROLLER_PID)${NC}\n"
 
-# 7. 准备测试镜像（Mock 引擎）
+# 7. 构建并加载测试镜像（Mock 引擎）
 echo -e "${YELLOW}[7/10] 准备测试镜像...${NC}"
-docker pull python:3.9-alpine
-kind load docker-image python:3.9-alpine --name $CLUSTER_NAME
+docker build -t mock-vllm:latest -f ../Dockerfile.mock ..
+kind load docker-image mock-vllm:latest --name $CLUSTER_NAME
 echo -e "${GREEN}✓ 镜像加载成功${NC}\n"
 
 # 8. 创建测试 CR
 echo -e "${YELLOW}[8/10] 创建测试 InferenceService...${NC}"
-TEST_NAME="test-service"
-
-# 创建测试 YAML（如果 samples 目录没有 mock 版本）
-cat > /tmp/test-inferenceservice.yaml <<EOF
-apiVersion: serving.trin.io/v1
-kind: InferenceService
-metadata:
-  name: $TEST_NAME
-  namespace: default
-spec:
-  modelName: "test-model"
-  engine: "mock"
-  replicas: 1
-EOF
-
-kubectl apply -f /tmp/test-inferenceservice.yaml
+TEST_NAME="mock-service"
+kubectl apply -f config/samples/serving_v1_inferenceservice_mock.yaml
 echo -e "  ${YELLOW}等待 Controller Reconcile...${NC}"
 sleep 5  # 等待 Reconcile 和资源创建
 echo -e "${GREEN}✓ CR 创建成功${NC}\n"
@@ -167,21 +153,15 @@ fi
 
 # 9.4 验证 Deployment 创建
 echo -e "  ${YELLOW}9.4 验证 Deployment...${NC}"
-DEPLOYMENT_READY=$(kubectl get deployment $TEST_NAME -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
-if [ "$DEPLOYMENT_READY" == "1" ]; then
+if kubectl rollout status deployment/$TEST_NAME --timeout=120s; then
+    DEPLOYMENT_READY=$(kubectl get deployment $TEST_NAME -o jsonpath='{.status.readyReplicas}')
     echo -e "  ${GREEN}✓ Deployment Ready: $DEPLOYMENT_READY/1${NC}"
 else
-    echo -e "  ${YELLOW}⚠ Deployment 还在启动中: $DEPLOYMENT_READY/1${NC}"
-    echo -e "  ${YELLOW}  等待 30 秒后重试...${NC}"
-    sleep 30
-    DEPLOYMENT_READY=$(kubectl get deployment $TEST_NAME -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
-    if [ "$DEPLOYMENT_READY" == "1" ]; then
-        echo -e "  ${GREEN}✓ Deployment Ready: $DEPLOYMENT_READY/1${NC}"
-    else
-        echo -e "  ${RED}✗ Deployment 未就绪${NC}"
-        kubectl describe deployment $TEST_NAME
-        exit 1
-    fi
+    echo -e "  ${RED}✗ Deployment 未在 120 秒内就绪${NC}"
+    kubectl describe deployment $TEST_NAME
+    kubectl describe pod -l serving.trin.io/inferenceservice=$TEST_NAME || true
+    kubectl logs -l serving.trin.io/inferenceservice=$TEST_NAME --all-containers --tail=100 || true
+    exit 1
 fi
 
 # 9.5 验证 Service 创建

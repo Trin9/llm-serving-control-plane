@@ -4,6 +4,10 @@ from flask import Flask, Response, request
 
 app = Flask(__name__)
 
+@app.route('/health', methods=['GET'])
+def health():
+    return "OK", 200
+
 @app.route('/v1/chat/completions', methods=['POST'])
 def chat_completions():
     data = request.json

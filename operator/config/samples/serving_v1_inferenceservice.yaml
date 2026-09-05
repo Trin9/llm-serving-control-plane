@@ -13,11 +13,20 @@ spec:
   replicas: 1
   engine: "vllm"
   resourceProfile: "gpu-small"
-  # GPU requests select nodes that advertise nvidia.com/gpu. Add cluster-specific
-  # node labels, taint toleration, or affinity only when the cluster requires them.
-  nodeSelector:
-    accelerator.example.com/model: "A100"
-  tolerations:
-    - key: "nvidia.com/gpu"
-      operator: "Exists"
-      effect: "NoSchedule"
+  # GPU requests select nodes that advertise nvidia.com/gpu. Uncomment only
+  # the cluster-specific constraints that match this cluster's policy.
+  # nodeSelector:
+  #   accelerator.example.com/model: "A100"
+  # tolerations:
+  #   - key: "nvidia.com/gpu"
+  #     operator: "Exists"
+  #     effect: "NoSchedule"
+  # affinity:
+  #   podAntiAffinity:
+  #     preferredDuringSchedulingIgnoredDuringExecution:
+  #       - weight: 100
+  #         podAffinityTerm:
+  #           topologyKey: kubernetes.io/hostname
+  #           labelSelector:
+  #             matchLabels:
+  #               serving.trin.io/inferenceservice: qwen-service
