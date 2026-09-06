@@ -1,0 +1,21 @@
+# Selects the AI gateway Service so its /metrics are scraped by the
+# kube-prometheus-stack Prometheus.
+#
+# NOTE: the gateway Service MUST be named "llm-operator-gate-service" for the
+# LLM Serving Monitor dashboard panels (they filter on service="llm-operator-gate-service").
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: llm-operator-gate-service
+  namespace: default
+  labels:
+    app.kubernetes.io/component: gateway-metrics
+spec:
+  selector:
+    matchLabels:
+      app: llm-operator-gate-service
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+

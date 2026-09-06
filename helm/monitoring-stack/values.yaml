@@ -1,42 +1,45 @@
-# Configure Prometheus
-prometheus:
-  prometheusSpec:
-    serviceMonitorSelectorNilUsesHelmValues: false
-    podMonitorSelectorNilUsesHelmValues: false
+# kube-prometheus-stack provides Prometheus Operator, Prometheus, Grafana,
+# Alertmanager, ServiceMonitor/PodMonitor CRDs, and Kubernetes rules.
+kube-prometheus-stack:
+  alertmanager:
+    enabled: true
+    alertmanagerSpec:
+      replicas: 1
+
+  grafana:
+    enabled: true
+    adminPassword: "admin"
+    sidecar:
+      dashboards:
+        enabled: true
+        label: grafana_dashboard
+        searchNamespace: ALL
+    # Grafana 13.x auto-installs several background app plugins and builds bleve
+    # indexes at startup; the old 256Mi limit caused OOM restarts (exit 137).
     resources:
       requests:
         cpu: 100m
-        memory: 128Mi
-      limits:
-        cpu: 200m
         memory: 256Mi
-  server:
-    global:
-      scrape_interval: 30s
-      scrape_timeout: 20s
-      evaluation_interval: 30s
-# Configure Grafana
-grafana:
-  adminPassword: "admin"
-  sidecar:
-    dashboards:
-      enabled: true
-      label: grafana_dashboard
-      searchNamespace: "default"
-  datasources:
-    datasources.yaml:
-      apiVersion: 1
-      datasources:
-      - name: Prometheus
-        type: prometheus
-        uid: prometheus
-        url: http://monitoring-stack-prometheus-server.default.svc.cluster.local
-        access: proxy
-        isDefault: true
-  resources:
-    requests:
-      cpu: 100m
-      memory: 128Mi
-    limits:
-      cpu: 200m
-      memory: 256Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+
+  prometheus:
+    enabled: true
+    prometheusSpec:
+      serviceMonitorSelectorNilUsesHelmValues: false
+      serviceMonitorSelector: {}
+      serviceMonitorNamespaceSelector: {}
+      podMonitorSelectorNilUsesHelmValues: false
+      podMonitorSelector: {}
+      podMonitorNamespaceSelector: {}
+      retention: 7d
+      scrapeInterval: 15s
+      evaluationInterval: 15s
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
