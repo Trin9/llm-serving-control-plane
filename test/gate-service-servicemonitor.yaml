@@ -1,5 +1,7 @@
 # Selects the AI gateway Service so its /metrics are scraped by the
-# kube-prometheus-stack Prometheus.
+# kube-prometheus-stack Prometheus. Works for BOTH:
+#   - Helm deployment (helm/llm-operator): service "llm-operator-gate-service", label app=gate-service
+#   - CPU-only preflight (scripts/kps-preflight.sh): same service name/labels
 #
 # NOTE: the gateway Service MUST be named "llm-operator-gate-service" for the
 # LLM Serving Monitor dashboard panels (they filter on service="llm-operator-gate-service").
@@ -13,9 +15,10 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app: llm-operator-gate-service
+      app: gate-service
   endpoints:
     - port: http
       path: /metrics
       interval: 15s
+
 

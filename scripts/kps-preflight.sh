@@ -41,6 +41,9 @@ MOCK_IMAGE="${KPS_MOCK_IMAGE:-mock-vllm:latest}"
 # The gateway Service name MUST match the dashboard's hardcoded label
 # (service="llm-operator-gate-service") and the Helm chart's service name.
 GATEWAY_SVC="llm-operator-gate-service"
+# Labels use the Helm-compatible value (app: gate-service) so the SAME
+# ServiceMonitor works for the Helm deployment on AKS and for this preflight.
+GATEWAY_APP_LABEL="${KPS_GATEWAY_APP_LABEL:-gate-service}"
 MOCK_SVC="mock-vllm"
 GATEWAY_LPORT=18080   # local port-forward for the gateway
 PROM_LPORT=19090      # local port-forward for Prometheus
@@ -173,11 +176,11 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: ${GATEWAY_SVC}
+      app: ${GATEWAY_APP_LABEL}
   template:
     metadata:
       labels:
-        app: ${GATEWAY_SVC}
+        app: ${GATEWAY_APP_LABEL}
     spec:
       automountServiceAccountToken: false
       containers:
@@ -201,10 +204,10 @@ metadata:
   name: ${GATEWAY_SVC}
   namespace: ${APP_NS}
   labels:
-    app: ${GATEWAY_SVC}
+    app: ${GATEWAY_APP_LABEL}
 spec:
   selector:
-    app: ${GATEWAY_SVC}
+    app: ${GATEWAY_APP_LABEL}
   ports:
     - name: http
       port: 8080

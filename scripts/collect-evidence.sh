@@ -56,11 +56,17 @@ cmd_init() {
 cmd_snapshot() {
   cmd_init
   log "capturing cluster state..."
-  kube get nodes,pods,deployments,services,endpoints,inferenceservices -A -o wide \
-    > "$RUN_DIR/cluster/cluster-state.txt" 2>&1 || true
+  # multiple resource types must be comma-separated for `kubectl get`
+  local kinds="nodes,pods,deployments,services,endpoints"
+  if kube get crd inferenceservices.serving.trin.io >/dev/null 2>&1; then
+    kinds="${kinds},inferenceservices"
+  fi
+  kube get "$kinds" -A -o wide > "$RUN_DIR/cluster/cluster-state.txt" 2>&1 || true
   kube get events -A --sort-by=.lastTimestamp > "$RUN_DIR/cluster/events.txt" 2>&1 || true
   kube version > "$RUN_DIR/cluster/versions.txt" 2>&1 || true
-  kube get inferenceservice -A -o yaml > "$RUN_DIR/manifest/inferenceservices.yaml" 2>&1 || true
+  if kube get crd inferenceservices.serving.trin.io >/dev/null 2>&1; then
+    kube get inferenceservice -A -o yaml > "$RUN_DIR/manifest/inferenceservices.yaml" 2>&1 || true
+  fi
   log "cluster snapshot written to $RUN_DIR/cluster"
 }
 
@@ -78,17 +84,15 @@ cmd_prom() {
   local i=0
   for q in "${queries[@]}"; do
     [ -z "$q" ] && continue
-    file="$RUN_DIR/metrics/query_${i}.json"
-    # short filename-safe label from the first metric name
-    local name; name="$(echo "$q" | sed -E 's/.*\(([A-Za-z_][A-Za-z0-9_]*).*/\1/;s/.*([A-Za-z_][A-Za-z0-9_]*\{.*)/\1/;s/[^A-Za-z0-9_]/_/g' | cut -c1-40)"
-    file="$RUN_DIR/metrics/${name:-q$i}.json"
+    # index-based filename: README.txt below maps q<i> to the exact PromQL
+    file="$RUN_DIR/metrics/q${i}.json"
     if curl -fsS --get "$PROM_URL/api/v1/query_range" \
         --data-urlencode "query=$q" \
         --data-urlencode "start=$start" --data-urlencode "end=$end" \
         --data-urlencode "step=$step" > "$file" 2>/dev/null; then
-      log "  saved [$name] -> $(basename "$file")"
+      log "  saved q${i}.json (query below in README.txt)"
     else
-      log "  [warn] query failed: $q"
+      log "  [warn] query q${i} failed: $q"
     fi
     i=$((i+1))
   done
@@ -118,7 +122,7 @@ cmd_record() {
   local sha=""
   ( cd "$REPO_ROOT" && git rev-parse HEAD 2>/dev/null ) && sha="$(cd "$REPO_ROOT" && git rev-parse HEAD)" || sha="unknown"
   cat > "$RUN_DIR/record.md" <<EOF
-# Validation Record: $(date -u +%Y-%m-%dT%H:%M:%SZ)Z - <E0/E1/E2/E3/E4>
+# Validation Record: $(date -u +%Y-%m-%dT%H:%M:%SZ) - <E0/E1/E2/E3/E4>
 
 - RUN_ID: $RUN_ID
 - Code revision: $sha
