@@ -1,0 +1,28 @@
+# E0/E1 experiment: REAL vLLM on a single GPU (AKS Standard_NC4as_T4_v3).
+#
+# Profile: gpu-t4-small = 1 GPU / 2 CPU / 12Gi  (fits NC4as_T4_v3 allocatable)
+# Model:   small public instruct model (fast image/weights download on T4)
+#
+# NOTE: resourceProfile is part of the CRD enum; it only takes effect if the
+# deployed operator contains the gpu-t4-small mapping (added in this repo).
+apiVersion: serving.trin.io/v1
+kind: InferenceService
+metadata:
+  # Must match test/vllm-servicemonitor.yaml's selector (serving.trin.io/inferenceservice: qwen-service)
+  name: qwen-service
+  namespace: default
+spec:
+  modelName: "Qwen/Qwen2.5-0.5B-Instruct"
+  engine: "vllm"
+  resourceProfile: "gpu-t4-small"
+  replicas: 1 # E4: set to 2 after two GPU nodes are ready
+
+  # Keep scheduling minimal for E0 (see runbook 3.3): the GPU resource request
+  # alone selects nodes advertising nvidia.com/gpu. Uncomment only after
+  # inspecting real node labels/taints:
+  # nodeSelector:
+  #   agentpool: gputest
+  # tolerations:
+  #   - key: "nvidia.com/gpu"
+  #     operator: "Exists"
+  #     effect: "NoSchedule"
