@@ -251,6 +251,14 @@ func resourceProfileFor(profile string) resourceProfile {
 			cpu:    "8",
 			memory: "64Gi",
 		}
+	case "gpu-t4-small":
+		// Fits an Azure Standard_NC4as_T4_v3 node (1x T4, 4 vCPU / ~28Gi raw,
+		// less after AKS/system reservations).
+		return resourceProfile{
+			gpu:    1,
+			cpu:    "2",
+			memory: "12Gi",
+		}
 	case "cpu-only":
 		return resourceProfile{
 			gpu:    0,

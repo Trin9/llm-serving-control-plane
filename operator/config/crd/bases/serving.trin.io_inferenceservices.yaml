@@ -1012,12 +1012,15 @@ spec:
                 type: integer
               resourceProfile:
                 default: gpu-small
-                description: ResourceProfile defines the compute resource template
-                  (e.g., "gpu-small", "gpu-large", "cpu-only")
+                description: |-
+                  ResourceProfile defines the compute resource template.
+                  gpu-small/gpu-medium/gpu-large target generic GPU nodes; gpu-t4-small fits an
+                  Azure Standard_NC4as_T4_v3 node (1x T4, ~2 CPU / 12Gi); cpu-only is GPU-free.
                 enum:
                 - gpu-small
                 - gpu-medium
                 - gpu-large
+                - gpu-t4-small
                 - cpu-only
                 type: string
               tolerations:

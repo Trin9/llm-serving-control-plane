@@ -38,9 +38,11 @@ type InferenceServiceSpec struct {
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
 
-	// ResourceProfile defines the compute resource template (e.g., "gpu-small", "gpu-large", "cpu-only")
+	// ResourceProfile defines the compute resource template.
+	// gpu-small/gpu-medium/gpu-large target generic GPU nodes; gpu-t4-small fits an
+	// Azure Standard_NC4as_T4_v3 node (1x T4, ~2 CPU / 12Gi); cpu-only is GPU-free.
 	// +kubebuilder:default="gpu-small"
-	// +kubebuilder:validation:Enum=gpu-small;gpu-medium;gpu-large;cpu-only
+	// +kubebuilder:validation:Enum=gpu-small;gpu-medium;gpu-large;gpu-t4-small;cpu-only
 	// +optional
 	ResourceProfile string `json:"resourceProfile,omitempty"`
 

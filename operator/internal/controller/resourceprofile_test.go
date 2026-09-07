@@ -22,6 +22,7 @@ func TestResourceProfileFor(t *testing.T) {
 		{name: "gpu-small", profile: "gpu-small", gpu: 1, cpu: "4", memory: "32Gi", hasGPU: true},
 		{name: "gpu-medium", profile: "gpu-medium", gpu: 1, cpu: "8", memory: "64Gi", hasGPU: true},
 		{name: "gpu-large", profile: "gpu-large", gpu: 2, cpu: "16", memory: "128Gi", hasGPU: true},
+		{name: "gpu-t4-small", profile: "gpu-t4-small", gpu: 1, cpu: "2", memory: "12Gi", hasGPU: true},
 		{name: "cpu-only", profile: "cpu-only", gpu: 0, cpu: "2", memory: "8Gi", hasGPU: false},
 	}
 
@@ -74,4 +75,19 @@ func TestBuildDeployment_AppliesGPUProfile(t *testing.T) {
 	})
 	_, hasGPU := cpuOnly.Spec.Template.Spec.Containers[0].Resources.Limits[corev1.ResourceName("nvidia.com/gpu")]
 	assert.False(t, hasGPU)
+
+	// gpu-t4-small must request exactly one GPU with modest CPU/memory
+	t4 := reconciler.buildDeployment(&servingv1.InferenceService{
+		Spec: servingv1.InferenceServiceSpec{
+			ModelName:       "qwen",
+			Engine:          "vllm",
+			ResourceProfile: "gpu-t4-small",
+		},
+	})
+	t4c := t4.Spec.Template.Spec.Containers[0]
+	t4gpu, ok := t4c.Resources.Limits[corev1.ResourceName("nvidia.com/gpu")]
+	assert.True(t, ok)
+	assert.Equal(t, "1", t4gpu.String())
+	assert.Equal(t, "2", t4c.Resources.Requests.Cpu().String())
+	assert.Equal(t, "12Gi", t4c.Resources.Requests.Memory().String())
 }

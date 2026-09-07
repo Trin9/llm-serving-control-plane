@@ -54,4 +54,7 @@ gate-service
 .aider.chat.history.md
 helm/monitoring-stack/charts/*.tgz
 
+# Phase5 validation evidence bundles (task8): never commit raw metrics/logs/screenshots
+artifacts/
+
 
