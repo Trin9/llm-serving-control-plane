@@ -1,0 +1,11 @@
+# Build context filter for the root Dockerfile (gate-service).
+# The root image only compiles ./app/cmd, so we only need the root Go module
+# sources (go.mod/go.sum) plus the app/ tree. Everything else (operator module,
+# helm, terraform, scripts, tests, artifacts) is excluded to keep ACR/CI uploads small.
+**
+!go.mod
+!go.sum
+!app/
+!app/**
+# Dockerfile.mock (mock-vllm) needs the standalone mock server script
+!scripts/mock_vllm.py

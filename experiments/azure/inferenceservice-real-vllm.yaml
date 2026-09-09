@@ -14,6 +14,10 @@ metadata:
 spec:
   modelName: "Qwen/Qwen2.5-0.5B-Instruct"
   engine: "vllm"
+  # Pin the real vLLM image to the ACR copy (server-side imported from Docker Hub)
+  # so AKS pulls do not depend on docker.io availability or :latest drift.
+  image: "llmphase5acr.azurecr.io/vllm/vllm-openai:latest"
+  imagePullPolicy: "IfNotPresent"
   resourceProfile: "gpu-t4-small"
   replicas: 1 # E4: set to 2 after two GPU nodes are ready
 
