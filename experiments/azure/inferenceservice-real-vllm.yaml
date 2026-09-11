@@ -21,12 +21,13 @@ spec:
   resourceProfile: "gpu-t4-small"
   replicas: 1 # E4: set to 2 after two GPU nodes are ready
 
-  # Keep scheduling minimal for E0 (see runbook 3.3): the GPU resource request
-  # alone selects nodes advertising nvidia.com/gpu. Uncomment only after
-  # inspecting real node labels/taints:
-  # nodeSelector:
-  #   agentpool: gputest
-  # tolerations:
-  #   - key: "nvidia.com/gpu"
-  #     operator: "Exists"
-  #     effect: "NoSchedule"
+  # Pin the workload to the GPU node pool and tolerate its Spot taint.
+  # AKS adds kubernetes.azure.com/scalesetpriority=spot:NoSchedule to Spot node
+  # pools, so any pod that must land on gputest needs this toleration.
+  nodeSelector:
+    agentpool: gputest
+  tolerations:
+    - key: "kubernetes.azure.com/scalesetpriority"
+      operator: "Equal"
+      value: "spot"
+      effect: "NoSchedule"
