@@ -9,16 +9,16 @@ spec:
     kind: InferenceService
     name: qwen-service
   minReplicaCount: 1
-  # E5 实验用 2 个 GPU 节点，上限 2（超过会让 Pod 因 GPU 不足 Unschedulable）
+  # E5 runs on 2 GPU nodes; cap at 2 (beyond that pods go Unschedulable for GPU)
   maxReplicaCount: 2
   cooldownPeriod: 300 # 5-minute cooldown: large model weights load slowly, so avoid frequent start/stop (debounce)
   pollingInterval: 15 # poll metrics every 15 seconds
   triggers:
   - type: prometheus
     metadata:
-      # KPS 的 Prometheus Service 在 monitoring ns（非 default）
+      # KPS Prometheus Service lives in the monitoring namespace (not default)
       serverAddress: http://monitoring-stack-kube-prom-prometheus.monitoring.svc:9090
       metricName: vllm_requests_waiting
-      # 实测 q3 结果只保证 service 标签，不假设 namespace 标签
+      # Archived q3 results guarantee only the service label; do not assume namespace
       query: sum(vllm:num_requests_waiting{service="qwen-service"})
-      threshold: "1" # 队列深度 >1 即扩容（单卡 T4 下 threshold=10 已是深背压）
+      threshold: "1" # scale up when queue depth > 1 (threshold=10 was too deep for a single T4)
