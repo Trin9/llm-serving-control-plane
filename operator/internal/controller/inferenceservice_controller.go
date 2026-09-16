@@ -549,6 +549,10 @@ func (r *InferenceServiceReconciler) updateStatus(ctx context.Context, inferSvc 
 
 	inferSvc.Status.Replicas = deployment.Status.ReadyReplicas
 
+	// Expose the Pod label selector so the HPA scale subresource (labelSelectorPath)
+	// can discover target Pods. Without this, KEDA/HPA reports "selector is required".
+	inferSvc.Status.Selector = metav1.FormatLabelSelector(deployment.Spec.Selector)
+
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(inferSvc.Namespace), client.MatchingLabels{
 		"serving.trin.io/inferenceservice": inferSvc.Name,

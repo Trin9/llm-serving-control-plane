@@ -94,11 +94,17 @@ type InferenceServiceStatus struct {
 	// Replicas is the observed number of replicas
 	// +optional
 	Replicas int32 `json:"replicas,omitempty"`
+
+	// Selector is the label selector string identifying the Pods managed by this service.
+	// It is required by the HorizontalPodAutoscaler scale subresource
+	// (labelSelectorPath) so that KEDA/HPA can discover the target Pods.
+	// +optional
+	Selector string `json:"selector,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas
+// +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.selector
 // +kubebuilder:printcolumn:name="Model",type="string",JSONPath=".spec.modelName",description="Model name"
 // +kubebuilder:printcolumn:name="Replicas",type="integer",JSONPath=".spec.replicas",description="Desired replicas"
 // +kubebuilder:printcolumn:name="URL",type="string",JSONPath=".status.url",description="Service endpoint"

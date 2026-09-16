@@ -1134,6 +1134,12 @@ spec:
                 description: Replicas is the observed number of replicas
                 format: int32
                 type: integer
+              selector:
+                description: |-
+                  Selector is the label selector string identifying the Pods managed by this service.
+                  It is required by the HorizontalPodAutoscaler scale subresource
+                  (labelSelectorPath) so that KEDA/HPA can discover the target Pods.
+                type: string
               url:
                 description: |-
                   URL is the endpoint to access the inference service
@@ -1147,6 +1153,7 @@ spec:
     storage: true
     subresources:
       scale:
+        labelSelectorPath: .status.selector
         specReplicasPath: .spec.replicas
         statusReplicasPath: .status.replicas
       status: {}
