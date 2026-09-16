@@ -655,7 +655,7 @@
       "linewidth": 2,
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_GPU_UTIL{job=\"dcgm-exporter\", instance=~\"${instance}\", gpu=~\"${gpu}\"}",
+          "expr": "DCGM_FI_DEV_GPU_UTIL{job=~\".*dcgm-exporter.*\", instance=~\"${instance}\", gpu=~\"${gpu}\"}",
           "legendFormat": "GPU {{gpu}}",
           "refId": "A"
         }
@@ -700,7 +700,7 @@
       "linewidth": 2,
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_GPU_TEMP{job=\"dcgm-exporter\", instance=~\"${instance}\", gpu=~\"${gpu}\"}",
+          "expr": "DCGM_FI_DEV_GPU_TEMP{job=~\".*dcgm-exporter.*\", instance=~\"${instance}\", gpu=~\"${gpu}\"}",
           "legendFormat": "GPU {{gpu}}",
           "refId": "A"
         }
@@ -743,7 +743,7 @@
       "linewidth": 2,
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_POWER_USAGE{job=\"dcgm-exporter\", instance=~\"${instance}\", gpu=~\"${gpu}\"}",
+          "expr": "DCGM_FI_DEV_POWER_USAGE{job=~\".*dcgm-exporter.*\", instance=~\"${instance}\", gpu=~\"${gpu}\"}",
           "legendFormat": "GPU {{gpu}}",
           "refId": "A"
         }
@@ -817,7 +817,7 @@
       },
       "targets": [
         {
-          "expr": "avg(DCGM_FI_DEV_GPU_TEMP{job=\"dcgm-exporter\", instance=~\"${instance}\", gpu=~\"${gpu}\"})",
+          "expr": "avg(DCGM_FI_DEV_GPU_TEMP{job=~\".*dcgm-exporter.*\", instance=~\"${instance}\", gpu=~\"${gpu}\"})",
           "legendFormat": "",
           "refId": "A"
         }
@@ -880,7 +880,7 @@
       },
       "targets": [
         {
-          "expr": "sum(DCGM_FI_DEV_POWER_USAGE{job=\"dcgm-exporter\", instance=~\"${instance}\", gpu=~\"${gpu}\"})",
+          "expr": "sum(DCGM_FI_DEV_POWER_USAGE{job=~\".*dcgm-exporter.*\", instance=~\"${instance}\", gpu=~\"${gpu}\"})",
           "legendFormat": "",
           "refId": "A"
         }
@@ -912,12 +912,12 @@
       "linewidth": 2,
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_FB_USED{job=\"dcgm-exporter\", instance=~\"${instance}\", gpu=~\"${gpu}\"}",
+          "expr": "DCGM_FI_DEV_FB_USED{job=~\".*dcgm-exporter.*\", instance=~\"${instance}\", gpu=~\"${gpu}\"}",
           "legendFormat": "Used GPU {{gpu}}",
           "refId": "A"
         },
         {
-          "expr": "DCGM_FI_DEV_FB_FREE{job=\"dcgm-exporter\", instance=~\"${instance}\", gpu=~\"${gpu}\"}",
+          "expr": "DCGM_FI_DEV_FB_FREE{job=~\".*dcgm-exporter.*\", instance=~\"${instance}\", gpu=~\"${gpu}\"}",
           "legendFormat": "Free GPU {{gpu}}",
           "refId": "B"
         }
@@ -960,7 +960,7 @@
       "linewidth": 2,
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_SM_CLOCK{job=\"dcgm-exporter\", instance=~\"${instance}\", gpu=~\"${gpu}\"} * 1000000",
+          "expr": "DCGM_FI_DEV_SM_CLOCK{job=~\".*dcgm-exporter.*\", instance=~\"${instance}\", gpu=~\"${gpu}\"} * 1000000",
           "legendFormat": "GPU {{gpu}}",
           "refId": "A"
         }

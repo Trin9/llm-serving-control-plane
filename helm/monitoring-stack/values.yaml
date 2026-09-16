@@ -14,6 +14,14 @@ kube-prometheus-stack:
         enabled: true
         label: grafana_dashboard
         searchNamespace: ALL
+    # Grafana 13's background plugin installer self-updates bundled datasource
+    # plugins at startup (e.g. prometheus 13.1.7 -> 13.1.9). With the default
+    # readOnlyRootFilesystem: true the update fails ("read-only file system")
+    # and the plugin process exits -> prometheus datasource becomes
+    # unregistered -> every Prometheus-backed panel shows no data.
+    # Keep the container root filesystem writable so bundled plugin updates succeed.
+    containerSecurityContext:
+      readOnlyRootFilesystem: false
     # Grafana 13.x auto-installs several background app plugins and builds bleve
     # indexes at startup; the old 256Mi limit caused OOM restarts (exit 137).
     resources:
