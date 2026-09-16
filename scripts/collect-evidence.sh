@@ -44,8 +44,8 @@ EVID_QUERIES_DEFAULT=(
   'histogram_quantile(0.95, sum(rate(ai_ttft_seconds_bucket{service="llm-operator-gate-service"}[5m])) by (le))'
   'sum(rate(ai_tpot_seconds_sum{service="llm-operator-gate-service"}[5m])) / sum(rate(ai_tpot_seconds_count{service="llm-operator-gate-service"}[5m]))'
   'sum by (service) (vllm:num_requests_waiting)'
-  'DCGM_FI_DEV_GPU_UTIL{job="dcgm-exporter"}'
-  'DCGM_FI_DEV_FB_USED{job="dcgm-exporter"}'
+  'DCGM_FI_DEV_GPU_UTIL{job=~".*dcgm-exporter.*"}'
+  'DCGM_FI_DEV_FB_USED{job=~".*dcgm-exporter.*"}'
 )
 
 cmd_init() {

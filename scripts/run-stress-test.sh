@@ -22,14 +22,16 @@ usage() {
     echo "  -c <num>    Concurrency (default: $CONCURRENCY)"
     echo "  -n <num>    Total requests (default: $TOTAL_REQUESTS)"
     echo "  -u <url>    Gate URL (default: $GATE_URL)"
+    echo "  -b <file>   Request body JSON (default: test/stress-test-body.json)"
     exit 1
 }
 
-while getopts "c:n:u:h" opt; do
+while getopts "c:n:u:b:h" opt; do
     case "$opt" in
         c) CONCURRENCY=$OPTARG ;;
         n) TOTAL_REQUESTS=$OPTARG ;;
         u) GATE_URL=$OPTARG ;;
+        b) TEST_BODY_FILE=$OPTARG ;;
         h) usage ;;
         *) usage ;;
     esac

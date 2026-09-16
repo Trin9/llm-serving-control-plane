@@ -1,0 +1,40 @@
+# ScrapeConfig for the AKS-managed DCGM exporter on GPU nodes.
+#
+# The AKS managed GPU stack (gpuProfile.nvidia.managementMode=Managed) runs the
+# DCGM exporter on each GPU node's host network and marks the node with:
+#   kubernetes.azure.com/dcgm-exporter=enabled
+# and exposes Prometheus metrics on port 19400.
+#
+# This ScrapeConfig discovers nodes via the Kubernetes node role, keeps only
+# nodes with the DCGM label, and rewrites the target address to <InternalIP>:19400.
+# It survives node recreation (no hardcoded IPs).
+#
+# Requires: prometheus-operator ScrapeConfig CRD (present in kube-prometheus-stack 89.x)
+#           and prometheus.spec.scrapeConfigSelector matching label release=monitoring-stack
+#           (set in helm/monitoring-stack/values.yaml).
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: ScrapeConfig
+metadata:
+  name: dcgm-exporter
+  namespace: monitoring
+  labels:
+    release: monitoring-stack
+spec:
+  scheme: HTTP
+  metricsPath: /metrics
+  scrapeInterval: 15s
+  kubernetesSDConfigs:
+    - role: Node
+  relabelings:
+    # keep only nodes advertising the DCGM exporter
+    - sourceLabels: [__meta_kubernetes_node_label_kubernetes_azure_com_dcgm_exporter]
+      regex: "enabled"
+      action: keep
+    # scrape <node InternalIP>:19400
+    - sourceLabels: [__meta_kubernetes_node_address_InternalIP]
+      targetLabel: __address__
+      replacement: "$1:19400"
+    # friendly labels for queries/dashboards
+    - sourceLabels: [__meta_kubernetes_node_name]
+      targetLabel: node
+      action: replace

@@ -1,0 +1,11 @@
+{
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Write a 100-word story about a robot learning to paint."
+    }
+  ],
+  "max_tokens": 150,
+  "stream": true
+}
