@@ -626,6 +626,301 @@
         "x": 0,
         "y": 30
       },
+      "id": 104,
+      "panels": [],
+      "title": "vLLM Engine (inference)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fill": 1,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 31
+      },
+      "id": 105,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "max": true,
+        "show": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "targets": [
+        {
+          "expr": "sum by (service) (vllm:num_requests_running)",
+          "legendFormat": "running {{service}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (service) (vllm:num_requests_waiting)",
+          "legendFormat": "waiting {{service}}",
+          "refId": "B"
+        }
+      ],
+      "title": "vLLM Requests (running / waiting)",
+      "type": "graph",
+      "yaxes": [
+        {
+          "format": "short",
+          "show": true
+        },
+        {
+          "format": "short",
+          "show": false
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fill": 1,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 31
+      },
+      "id": 106,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "max": true,
+        "show": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "targets": [
+        {
+          "expr": "sum by (service) (rate(vllm:num_preemptions_total[5m]))",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "title": "vLLM Preemptions (rate)",
+      "type": "graph",
+      "yaxes": [
+        {
+          "format": "short",
+          "show": true
+        },
+        {
+          "format": "short",
+          "show": false
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fill": 1,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 31
+      },
+      "id": 107,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "max": true,
+        "show": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "targets": [
+        {
+          "expr": "vllm:gpu_cache_usage_perc",
+          "legendFormat": "gpu {{gpu_id}}",
+          "refId": "A"
+        }
+      ],
+      "title": "vLLM KV Cache Usage %",
+      "type": "graph",
+      "yaxes": [
+        {
+          "format": "short",
+          "show": true
+        },
+        {
+          "format": "short",
+          "show": false
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fill": 1,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 39
+      },
+      "id": 108,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "max": true,
+        "show": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "targets": [
+        {
+          "expr": "sum by (service) (rate(vllm:prompt_tokens_total[5m]))",
+          "legendFormat": "prompt {{service}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (service) (rate(vllm:generation_tokens_total[5m]))",
+          "legendFormat": "generation {{service}}",
+          "refId": "B"
+        }
+      ],
+      "title": "vLLM Token Throughput (tok/s)",
+      "type": "graph",
+      "yaxes": [
+        {
+          "format": "short",
+          "show": true
+        },
+        {
+          "format": "short",
+          "show": false
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fill": 1,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 39
+      },
+      "id": 109,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "max": true,
+        "show": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(vllm:time_to_first_token_seconds_bucket[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(vllm:time_to_first_token_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(vllm:time_to_first_token_seconds_bucket[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "vLLM TTFT (engine) P50/P95/P99",
+      "type": "graph",
+      "yaxes": [
+        {
+          "format": "s",
+          "show": true
+        },
+        {
+          "format": "short",
+          "show": false
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fill": 1,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 39
+      },
+      "id": 110,
+      "legend": {
+        "alignAsTable": true,
+        "avg": true,
+        "current": true,
+        "max": true,
+        "show": true
+      },
+      "lines": true,
+      "linewidth": 2,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(vllm:time_per_output_token_seconds_bucket[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(vllm:time_per_output_token_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(vllm:time_per_output_token_seconds_bucket[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "vLLM TPOT (engine) P50/P95/P99",
+      "type": "graph",
+      "yaxes": [
+        {
+          "format": "s",
+          "show": true
+        },
+        {
+          "format": "short",
+          "show": false
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 47
+      },
       "id": 102,
       "panels": [],
       "title": "GPU Health (DCGM Exporter)",
@@ -641,7 +936,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 31
+        "y": 48
       },
       "id": 10,
       "legend": {
@@ -686,7 +981,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 31
+        "y": 48
       },
       "id": 11,
       "legend": {
@@ -729,7 +1024,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 39
+        "y": 56
       },
       "id": 12,
       "legend": {
@@ -771,7 +1066,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 39
+        "y": 56
       },
       "id": 13,
       "options": {
@@ -834,7 +1129,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 39
+        "y": 56
       },
       "id": 14,
       "options": {
@@ -898,7 +1193,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 47
+        "y": 64
       },
       "id": 15,
       "legend": {
@@ -946,7 +1241,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 47
+        "y": 64
       },
       "id": 16,
       "legend": {
