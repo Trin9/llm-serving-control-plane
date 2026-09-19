@@ -744,8 +744,8 @@
       "linewidth": 2,
       "targets": [
         {
-          "expr": "vllm:gpu_cache_usage_perc",
-          "legendFormat": "gpu {{gpu_id}}",
+          "expr": "vllm:kv_cache_usage_perc",
+          "legendFormat": "{{model_name}}",
           "refId": "A"
         }
       ],
@@ -885,17 +885,17 @@
       "linewidth": 2,
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(vllm:time_per_output_token_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(vllm:request_time_per_output_token_seconds_bucket[5m])))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(vllm:time_per_output_token_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(vllm:request_time_per_output_token_seconds_bucket[5m])))",
           "legendFormat": "p95",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(vllm:time_per_output_token_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(vllm:request_time_per_output_token_seconds_bucket[5m])))",
           "legendFormat": "p99",
           "refId": "C"
         }
