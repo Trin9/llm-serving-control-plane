@@ -5,10 +5,19 @@ kube-prometheus-stack:
     enabled: true
     alertmanagerSpec:
       replicas: 1
+      nodeSelector:
+        kubernetes.azure.com/agentpool: nodepool1
 
   grafana:
     enabled: true
     adminPassword: "admin"
+    # Persist Grafana state across pod restarts / cluster stop-start.
+    persistence:
+      enabled: true
+      storageClassName: managed-csi
+      size: 5Gi
+    nodeSelector:
+      kubernetes.azure.com/agentpool: nodepool1
     sidecar:
       dashboards:
         enabled: true
@@ -42,6 +51,17 @@ kube-prometheus-stack:
       podMonitorSelector: {}
       podMonitorNamespaceSelector: {}
       retention: 7d
+      # Persist Prometheus TSDB (emptyDir was wiped when pods were evicted / cluster stopped).
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: managed-csi
+            accessModes: [ReadWriteOnce]
+            resources:
+              requests:
+                storage: 20Gi
+      nodeSelector:
+        kubernetes.azure.com/agentpool: nodepool1
       scrapeInterval: 15s
       evaluationInterval: 15s
       resources:
@@ -51,3 +71,13 @@ kube-prometheus-stack:
         limits:
           cpu: 500m
           memory: 512Mi
+
+  # Pin monitoring control-plane components to the system pool so GPU pool
+  # scale-to-zero / churn cannot evict them (2026-09-19 incident: TSDB wiped).
+  # NOTE: node-exporter (DaemonSet) and dcgm-exporter must NOT be pinned.
+  prometheusOperator:
+    nodeSelector:
+      kubernetes.azure.com/agentpool: nodepool1
+  kube-state-metrics:
+    nodeSelector:
+      kubernetes.azure.com/agentpool: nodepool1

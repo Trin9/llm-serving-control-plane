@@ -1,0 +1,44 @@
+# LLM serving alert rules (closeout §4). Selector: kube-prometheus-stack default
+# ruleSelector uses helm release label => keep `release: <release-name>`.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: llm-serving-alerts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    release: {{ .Release.Name }}
+spec:
+  groups:
+    - name: llm-serving.rules
+      rules:
+        - alert: LLMQueueBacklog
+          expr: sum(vllm:num_requests_waiting{service="qwen-service"}) > 10
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "vLLM queue backlog > 10 for 2m (qwen-service)"
+        - alert: LLMAutoscalerAtMaxReplicas
+          expr: |
+            (kube_horizontalpodautoscaler_status_current_replicas{horizontalpodautoscaler="keda-hpa-qwen-service-vllm-queue"}
+              ==
+            kube_horizontalpodautoscaler_spec_max_replicas{horizontalpodautoscaler="keda-hpa-qwen-service-vllm-queue"})
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "KEDA autoscaler stayed at maxReplicaCount for 5m (capacity ceiling)"
+        - alert: LLMPodUnschedulable
+          expr: kube_pod_status_unschedulable{namespace="default"} == 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pod unschedulable in default namespace (GPU capacity?)"
+        - alert: VLLMTargetDown
+          expr: up{job="qwen-service"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "vLLM metrics target (qwen-service) is down"
