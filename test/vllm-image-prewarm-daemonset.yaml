@@ -1,0 +1,42 @@
+# Stage 6 B2: pre-pull the vLLM image on every gputest node so a freshly
+# joined node can serve a workload pod from a WARM image cache
+# (saves ~2.5min of cold image pull; see closeout C6-coldstart-ab.md).
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vllm-image-prewarm
+  namespace: default
+  labels:
+    app: vllm-image-prewarm
+spec:
+  selector:
+    matchLabels:
+      app: vllm-image-prewarm
+  template:
+    metadata:
+      labels:
+        app: vllm-image-prewarm
+    spec:
+      nodeSelector:
+        agentpool: gputest
+      tolerations:
+        - key: "kubernetes.azure.com/scalesetpriority"
+          operator: "Equal"
+          value: "spot"
+          effect: "NoSchedule"
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: pause
+          image: llmphase5eaacr.azurecr.io/vllm/vllm-openai:latest
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "sleep infinity"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
