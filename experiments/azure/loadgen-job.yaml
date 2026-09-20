@@ -1,0 +1,47 @@
+# Closeout python loadgen Job. __CONC__/__DUR__ are substituted by
+# scripts/closeout-run-arm.sh before `kubectl apply`.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: loadgen-job
+  namespace: default
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1500
+  template:
+    metadata:
+      labels:
+        app: loadgen
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: loadgen
+          image: llmphase5eaacr.azurecr.io/python:3.12-slim
+          command: ["python3", "/src/loadgen.py"]
+          args:
+            - --url
+            - http://llm-operator-gate-service.default.svc.cluster.local:8080/v1/chat/completions
+            - --concurrency
+            - "__CONC__"
+            - --duration
+            - "__DUR__"
+          env:
+            - name: TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: loadgen-token
+                  key: TOKEN
+          volumeMounts:
+            - name: src
+              mountPath: /src
+          resources:
+            requests:
+              cpu: 500m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+      volumes:
+        - name: src
+          configMap:
+            name: loadgen-src
