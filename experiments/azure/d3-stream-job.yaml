@@ -1,0 +1,41 @@
+# D3 streaming idempotency / billing probe Job.
+# __RID__ / __COUNT__ substituted by /tmp/d3-followup2.sh.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: d3-stream-req
+  namespace: default
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: d3s
+          image: llmphase5eaacr.azurecr.io/python:3.12-slim
+          command: ["python3", "/src/d3-stream-replay.py"]
+          env:
+            - name: TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: loadgen-token
+                  key: TOKEN
+            - name: RID
+              value: "__RID__"
+            - name: COUNT
+              value: "__COUNT__"
+          volumeMounts:
+            - name: src
+              mountPath: /src
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: src
+          configMap:
+            name: d3s-src
