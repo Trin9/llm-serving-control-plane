@@ -453,11 +453,12 @@
       "linewidth": 2,
       "targets": [
         {
-          "expr": "sum by (service) (vllm:num_requests_waiting)",
-          "legendFormat": "{{service}}",
+          "expr": "sum by (pod) (vllm:num_requests_waiting)",
+          "legendFormat": "{{pod}}",
           "refId": "A"
         }
       ],
+      "description": "Expected flat 0 until concurrency exceeds max_num_seqs (256). Autoscaling now uses vllm:num_requests_running > 48 instead.",
       "title": "vLLM Backend Requests Waiting (Queue Backlog)",
       "type": "graph",
       "yaxes": [
@@ -655,13 +656,13 @@
       "linewidth": 2,
       "targets": [
         {
-          "expr": "sum by (service) (vllm:num_requests_running)",
-          "legendFormat": "running {{service}}",
+          "expr": "sum by (pod) (vllm:num_requests_running)",
+          "legendFormat": "running {{pod}}",
           "refId": "A"
         },
         {
-          "expr": "sum by (service) (vllm:num_requests_waiting)",
-          "legendFormat": "waiting {{service}}",
+          "expr": "sum by (pod) (vllm:num_requests_waiting)",
+          "legendFormat": "waiting {{pod}}",
           "refId": "B"
         }
       ],
@@ -702,8 +703,8 @@
       "linewidth": 2,
       "targets": [
         {
-          "expr": "sum by (service) (rate(vllm:num_preemptions_total[5m]))",
-          "legendFormat": "{{service}}",
+          "expr": "sum by (pod) (rate(vllm:num_preemptions_total[5m]))",
+          "legendFormat": "{{pod}}",
           "refId": "A"
         }
       ],
@@ -745,7 +746,7 @@
       "targets": [
         {
           "expr": "vllm:kv_cache_usage_perc",
-          "legendFormat": "{{model_name}}",
+          "legendFormat": "{{pod}}",
           "refId": "A"
         }
       ],
@@ -786,13 +787,13 @@
       "linewidth": 2,
       "targets": [
         {
-          "expr": "sum by (service) (rate(vllm:prompt_tokens_total[5m]))",
-          "legendFormat": "prompt {{service}}",
+          "expr": "sum by (pod) (rate(vllm:prompt_tokens_total[5m]))",
+          "legendFormat": "prompt {{pod}}",
           "refId": "A"
         },
         {
-          "expr": "sum by (service) (rate(vllm:generation_tokens_total[5m]))",
-          "legendFormat": "generation {{service}}",
+          "expr": "sum by (pod) (rate(vllm:generation_tokens_total[5m]))",
+          "legendFormat": "generation {{pod}}",
           "refId": "B"
         }
       ],
@@ -951,7 +952,7 @@
       "targets": [
         {
           "expr": "DCGM_FI_DEV_GPU_UTIL{job=~\".*dcgm-exporter.*\", instance=~\"${instance}\", gpu=~\"${gpu}\"}",
-          "legendFormat": "GPU {{gpu}}",
+          "legendFormat": "{{Hostname}} GPU{{gpu}}",
           "refId": "A"
         }
       ],
@@ -996,7 +997,7 @@
       "targets": [
         {
           "expr": "DCGM_FI_DEV_GPU_TEMP{job=~\".*dcgm-exporter.*\", instance=~\"${instance}\", gpu=~\"${gpu}\"}",
-          "legendFormat": "GPU {{gpu}}",
+          "legendFormat": "{{Hostname}} GPU{{gpu}}",
           "refId": "A"
         }
       ],
@@ -1039,7 +1040,7 @@
       "targets": [
         {
           "expr": "DCGM_FI_DEV_POWER_USAGE{job=~\".*dcgm-exporter.*\", instance=~\"${instance}\", gpu=~\"${gpu}\"}",
-          "legendFormat": "GPU {{gpu}}",
+          "legendFormat": "{{Hostname}} GPU{{gpu}}",
           "refId": "A"
         }
       ],
@@ -1208,12 +1209,12 @@
       "targets": [
         {
           "expr": "DCGM_FI_DEV_FB_USED{job=~\".*dcgm-exporter.*\", instance=~\"${instance}\", gpu=~\"${gpu}\"}",
-          "legendFormat": "Used GPU {{gpu}}",
+          "legendFormat": "Used {{Hostname}}",
           "refId": "A"
         },
         {
           "expr": "DCGM_FI_DEV_FB_FREE{job=~\".*dcgm-exporter.*\", instance=~\"${instance}\", gpu=~\"${gpu}\"}",
-          "legendFormat": "Free GPU {{gpu}}",
+          "legendFormat": "Free {{Hostname}}",
           "refId": "B"
         }
       ],
@@ -1256,7 +1257,7 @@
       "targets": [
         {
           "expr": "DCGM_FI_DEV_SM_CLOCK{job=~\".*dcgm-exporter.*\", instance=~\"${instance}\", gpu=~\"${gpu}\"} * 1000000",
-          "legendFormat": "GPU {{gpu}}",
+          "legendFormat": "{{Hostname}} GPU{{gpu}}",
           "refId": "A"
         }
       ],
@@ -1456,7 +1457,7 @@
       },
       "targets": [
         {
-          "expr": "count(kube_node_labels{label_agentpool=\"gputest\"})",
+          "expr": "count(kube_node_status_capacity{resource=\"nvidia_com_gpu\"})",
           "legendFormat": "GPU nodes",
           "refId": "A"
         }
