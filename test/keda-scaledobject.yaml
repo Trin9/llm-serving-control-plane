@@ -11,14 +11,16 @@ spec:
   minReplicaCount: 1
   # E5 runs on 2 GPU nodes; cap at 2 (beyond that pods go Unschedulable for GPU)
   maxReplicaCount: 2
-  cooldownPeriod: 300 # 5-minute cooldown: large model weights load slowly, so avoid frequent start/stop (debounce)
-  pollingInterval: 15 # poll metrics every 15 seconds
+  # NOTE (2026-09-20): pollingInterval/cooldownPeriod are ignored by KEDA when
+  # minReplicaCount >= 1 (KEDA emits warnings); scale-down pacing follows the
+  # HPA default 300s stabilization window.
   triggers:
   - type: prometheus
     metadata:
       # KPS Prometheus Service lives in the monitoring namespace (not default)
       serverAddress: http://monitoring-stack-kube-prom-prometheus.monitoring.svc:9090
-      metricName: vllm_requests_waiting
-      # Archived q3 results guarantee only the service label; do not assume namespace
-      query: sum(vllm:num_requests_waiting{service="qwen-service"})
-      threshold: "1" # scale up when queue depth > 1 (threshold=10 was too deep for a single T4)
+      # `waiting` stays 0 until concurrency > max_num_seqs (256); the real GPU
+      # knee is ~64 concurrency -> trigger on running requests instead.
+      metricName: vllm_requests_running
+      query: sum(vllm:num_requests_running{service="qwen-service"})
+      threshold: "48" # ≈75% of the single-replica knee (64): fires before saturation
