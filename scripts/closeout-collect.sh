@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Closeout recovery + collection (run via VS Code task when the main shell is stuck).
 set -uo pipefail
+export GIT_PAGER=cat PAGER=cat
 cd "$(dirname "$0")/.."
 
 echo "== $(date -u +%FT%TZ) phase1: kill stuck closeout procs =="
@@ -32,7 +33,7 @@ pgrep -af 'helm upgrade|git commit|closeout-run-arm|keda-observe' | head -10 || 
 echo "-- helm history --"
 helm history monitoring-stack -n monitoring 2>&1 | tail -3
 echo "-- git --"
-git log --oneline -3
+git --no-pager log --oneline -3
 git status --short
 echo "-- evidence --"
 ls artifacts/phase5-azure/20260920T065208Z/closeout/ | tail -8
