@@ -1,0 +1,22 @@
+# D5(c2): scratch InferenceService created with a NON-EXISTENT model name.
+# Fresh deployment (fresh selector labels) -> vLLM crashes at startup ->
+# CrashLoopBackOff + operator conditions. Deleted right after capture.
+apiVersion: serving.trin.io/v1
+kind: InferenceService
+metadata:
+  name: d5-bad-model
+  namespace: default
+spec:
+  modelName: "Qwen/NonExistent-Model-D5"
+  engine: "vllm"
+  image: "llmphase5eaacr.azurecr.io/vllm/vllm-openai:latest"
+  imagePullPolicy: "IfNotPresent"
+  resourceProfile: "gpu-t4-small"
+  replicas: 1
+  nodeSelector:
+    agentpool: gputest
+  tolerations:
+    - key: "kubernetes.azure.com/scalesetpriority"
+      operator: "Equal"
+      value: "spot"
+      effect: "NoSchedule"

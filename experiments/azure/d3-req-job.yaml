@@ -1,0 +1,43 @@
+# D3 request Job. __MODE__ / __COUNT__ / __REPLAY_RID__ are substituted by
+# /tmp/d3-redis.sh before `kubectl apply`. Source: experiments/azure/d3-requests.py
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: d3-req
+  namespace: default
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: d3req
+          image: llmphase5eaacr.azurecr.io/python:3.12-slim
+          command: ["python3", "/src/d3-requests.py"]
+          env:
+            - name: TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: loadgen-token
+                  key: TOKEN
+            - name: MODE
+              value: "__MODE__"
+            - name: COUNT
+              value: "__COUNT__"
+            - name: REPLAY_RID
+              value: "__REPLAY_RID__"
+          volumeMounts:
+            - name: src
+              mountPath: /src
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: src
+          configMap:
+            name: d3-src

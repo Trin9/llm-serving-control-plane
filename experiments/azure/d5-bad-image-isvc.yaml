@@ -1,0 +1,22 @@
+# D5(b): scratch InferenceService pointing to a NON-EXISTENT image tag.
+# Expected: ErrImagePull -> ImagePullBackOff on the pod; observe what the
+# custom operator surfaces in ISVC conditions. Delete right after capture.
+apiVersion: serving.trin.io/v1
+kind: InferenceService
+metadata:
+  name: d5-bad-image
+  namespace: default
+spec:
+  modelName: "Qwen/Qwen2.5-0.5B-Instruct"
+  engine: "vllm"
+  image: "llmphase5eaacr.azurecr.io/vllm/vllm-openai:does-not-exist-d5"
+  imagePullPolicy: "Always"
+  resourceProfile: "gpu-t4-small"
+  replicas: 1
+  nodeSelector:
+    agentpool: gputest
+  tolerations:
+    - key: "kubernetes.azure.com/scalesetpriority"
+      operator: "Equal"
+      value: "spot"
+      effect: "NoSchedule"

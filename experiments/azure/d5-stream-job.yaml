@@ -1,0 +1,38 @@
+# D5(a): long streaming request used while the vLLM pod is deleted mid-stream.
+# The python source lives in experiments/azure/d5-stream.py and is loaded into
+# configMap d5-stream-src by /tmp/d5-a-stream-kill.sh before apply.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: d5-stream
+  namespace: default
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: stream
+          image: llmphase5eaacr.azurecr.io/python:3.12-slim
+          command: ["python3", "/src/stream.py"]
+          env:
+            - name: TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: loadgen-token
+                  key: TOKEN
+          volumeMounts:
+            - name: src
+              mountPath: /src
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: src
+          configMap:
+            name: d5-stream-src
