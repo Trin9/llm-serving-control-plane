@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bridge-test
+  namespace: monitoring
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: post
+        image: llmphase5eaacr.azurecr.io/python:3.12-slim
+        command: ["python3", "-c"]
+        args:
+        - |
+          import json, urllib.request
+          payload = {
+            "version": "4",
+            "status": "firing",
+            "alerts": [{
+              "status": "firing",
+              "labels": {"alertname": "BridgeTest", "severity": "info", "namespace": "monitoring"},
+              "annotations": {
+                "summary": "bridge smoke test (from inside cluster)",
+                "description": "如果飞书群收到这条消息，说明 Alertmanager -> Feishu bridge 链路工作正常"
+              },
+              "startsAt": "2026-09-20T18:00:00Z",
+              "endsAt": "0001-01-01T00:00:00Z",
+              "fingerprint": "bridge-test"
+            }]
+          }
+          req = urllib.request.Request(
+            "http://alertmanager-feishu-bridge.monitoring.svc.cluster.local:8080/alert",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+          )
+          with urllib.request.urlopen(req, timeout=10) as r:
+              print("bridge response:", r.status, r.read().decode()[:300])

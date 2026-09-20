@@ -1,0 +1,132 @@
+{{- if .Values.feishuBridge.enabled }}
+# Alertmanager -> Feishu bot bridge (stdlib-only python; webhook URL from Secret).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-feishu-bridge-src
+  namespace: {{ .Release.Namespace }}
+data:
+  bridge.py: |
+    #!/usr/bin/env python3
+    """Bridge: Alertmanager webhook JSON -> Feishu bot text message."""
+    import json
+    import os
+    import urllib.request
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    FEISHU_URL = os.environ["FEISHU_URL"]
+
+
+    def fmt_alert(a):
+        labels = a.get("labels", {})
+        ann = a.get("annotations", {})
+        keep = ("namespace", "pod", "service", "node", "horizontalpodautoscaler")
+        extra = ", ".join(f"{k}={labels[k]}" for k in keep if k in labels)
+        return "\n".join(
+            [
+                f"[{a.get('status', '?').upper()}] {labels.get('alertname', '?')} (severity={labels.get('severity', '-')})",
+                f"  {ann.get('summary', '')}",
+                f"  startsAt: {a.get('startsAt', '')}",
+                f"  labels: {extra}",
+            ]
+        )
+
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            try:
+                payload = json.loads(body)
+                alerts = payload.get("alerts", [])
+                status = payload.get("status", "firing")
+                text = f"Alertmanager [{status}] x{len(alerts)}\n" + "\n".join(
+                    fmt_alert(a) for a in alerts
+                )
+                data = json.dumps(
+                    {"msg_type": "text", "content": {"text": text}}
+                ).encode()
+                req = urllib.request.Request(
+                    FEISHU_URL,
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    print("feishu:", resp.status, resp.read(120), flush=True)
+                self.send_response(200)
+            except Exception as exc:  # noqa: BLE001
+                print("ERROR:", exc, flush=True)
+                self.send_response(500)
+            self.end_headers()
+
+        def log_message(self, fmt, *args):  # noqa: A003
+            print(fmt % args, flush=True)
+
+
+    if __name__ == "__main__":
+        port = int(os.environ.get("PORT", "8080"))
+        print(f"bridge listening on :{port}", flush=True)
+        HTTPServer(("", port), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager-feishu-bridge
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alertmanager-feishu-bridge
+  template:
+    metadata:
+      labels:
+        app: alertmanager-feishu-bridge
+    spec:
+      nodeSelector:
+        kubernetes.azure.com/agentpool: nodepool1
+      containers:
+        - name: bridge
+          image: {{ .Values.feishuBridge.image }}
+          command: ["python3", "/app/bridge.py"]
+          env:
+            - name: FEISHU_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.feishuBridge.existingSecret }}
+                  key: url
+            - name: PORT
+              value: "8080"
+          volumeMounts:
+            - name: src
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+      volumes:
+        - name: src
+          configMap:
+            name: alertmanager-feishu-bridge-src
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager-feishu-bridge
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: alertmanager-feishu-bridge
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+{{- end }}

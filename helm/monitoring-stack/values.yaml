@@ -7,6 +7,24 @@ kube-prometheus-stack:
       replicas: 1
       nodeSelector:
         kubernetes.azure.com/agentpool: nodepool1
+    # Route everything (except the always-firing Watchdog) to the Feishu bridge.
+    config:
+      route:
+        group_by: ["alertname", "namespace"]
+        group_wait: 15s
+        group_interval: 2m
+        repeat_interval: 2h
+        receiver: feishu
+        routes:
+          - matchers:
+              - "alertname = Watchdog"
+            receiver: "null"
+      receivers:
+        - name: feishu
+          webhook_configs:
+            - url: "http://alertmanager-feishu-bridge.monitoring.svc.cluster.local:8080/alert"
+              send_resolved: true
+        - name: "null"
 
   grafana:
     enabled: true
@@ -81,3 +99,25 @@ kube-prometheus-stack:
   kube-state-metrics:
     nodeSelector:
       kubernetes.azure.com/agentpool: nodepool1
+
+  # AKS managed control plane does not expose scheduler / kube-proxy /
+  # controller-manager / etcd metrics, so the kps default "XxxDown" alerts for
+  # them are permanent false positives (they would spam Feishu every
+  # repeat_interval). Disable those rule groups; keep everything else.
+  defaultRules:
+    rules:
+      # NOTE: chart v89 flag names are kubeSchedulerAlerting/kubeSchedulerRecording
+      # (there is no plain `kubeScheduler` key).
+      kubeSchedulerAlerting: false
+      kubeProxy: false
+      kubeControllerManager: false
+      etcd: false
+
+# Alertmanager -> Feishu bot bridge (webhook adapter, stdlib python).
+# The Feishu webhook URL stays OUT of git; create the secret first:
+#   kubectl create secret generic feishu-webhook -n monitoring \
+#     --from-literal=url='https://open.feishu.cn/open-apis/bot/v2/hook/<token>'
+feishuBridge:
+  enabled: true
+  image: llmphase5eaacr.azurecr.io/python:3.12-slim
+  existingSecret: feishu-webhook
