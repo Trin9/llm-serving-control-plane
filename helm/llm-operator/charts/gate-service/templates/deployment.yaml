@@ -19,6 +19,10 @@ spec:
         release: {{ .Release.Name }}
     spec:
       serviceAccountName: {{ .Release.Name }}-gate-service
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: gate-service
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"

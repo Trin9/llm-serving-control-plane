@@ -101,3 +101,16 @@ redis:
     repository: redis
     tag: 7-alpine
     pullPolicy: IfNotPresent
+  # closeout-final: keep control-plane components off the GPU pool (set per environment).
+  nodeSelector: {}
+  # closeout-final: persist quota/idempotency/ledger state across pod & node restarts
+  # (AOF on a managed-csi PVC). Required for billing correctness in production.
+  persistence:
+    enabled: false
+    size: 2Gi
+    storageClass: managed-csi
+  # closeout-final: requirepass sourced from an existing secret (shared with the gateway).
+  auth:
+    enabled: false
+    existingSecret: llm-operator-gate-env
+    passwordKey: REDIS_PASSWORD

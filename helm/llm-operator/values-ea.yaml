@@ -1,0 +1,35 @@
+# EA (eastasia) deployment overrides — closeout-final (2026-09-21).
+#
+# Usage (with the release already installed):
+#   helm upgrade llm-operator ./helm/llm-operator -n default \
+#     -f helm/llm-operator/values-ea.yaml \
+#     --set gate-service.image.repository=llmphase5eaacr.azurecr.io/gate-service \
+#     --set gate-service.image.tag=<git-sha> \
+#     --set image.repository=llmphase5eaacr.azurecr.io/llm-operator \
+#     --set image.tag=<git-sha>
+#
+# Purpose (review_20260921 remediation):
+#  1) Control-plane scheduling isolation: llm-operator components must NOT run on
+#     the GPU pool (D1 showed gateway/redis/metrics-server evicted on GPU node loss).
+#  2) Redis durability/auth: AOF on managed-csi PVC + requirepass from the same
+#     secret the gateway uses (llm-operator-gate-env:REDIS_PASSWORD).
+
+# controller-manager (parent chart)
+nodeSelector:
+  kubernetes.azure.com/agentpool: nodepool1
+
+gate-service:
+  nodeSelector:
+    kubernetes.azure.com/agentpool: nodepool1
+
+redis:
+  nodeSelector:
+    kubernetes.azure.com/agentpool: nodepool1
+  persistence:
+    enabled: true
+    size: 2Gi
+    storageClass: managed-csi
+  auth:
+    enabled: true
+    existingSecret: llm-operator-gate-env
+    passwordKey: REDIS_PASSWORD

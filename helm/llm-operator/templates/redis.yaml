@@ -18,20 +18,76 @@ spec:
         app: redis
         release: {{ .Release.Name }}
     spec:
+      {{- with .Values.redis.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: redis
           image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
           imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
+          # closeout-final: AOF persistence (survives restarts) + optional requirepass.
+          {{- if or .Values.redis.persistence.enabled .Values.redis.auth.enabled }}
+          args:
+            {{- if .Values.redis.persistence.enabled }}
+            - "--appendonly"
+            - "yes"
+            - "--appendfsync"
+            - "everysec"
+            {{- end }}
+            {{- if .Values.redis.auth.enabled }}
+            - "--requirepass"
+            - "$(REDIS_PASSWORD)"
+            {{- end }}
+          {{- end }}
+          {{- if .Values.redis.auth.enabled }}
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.auth.existingSecret }}
+                  key: {{ .Values.redis.auth.passwordKey }}
+          {{- end }}
           ports:
             - name: redis
               containerPort: 6379
               protocol: TCP
+          {{- if .Values.redis.persistence.enabled }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          {{- end }}
           resources:
             limits:
               memory: 256Mi
             requests:
               memory: 128Mi
+      {{- if .Values.redis.persistence.enabled }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-redis
+      {{- end }}
 ---
+{{- if .Values.redis.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-redis
+  labels:
+    app: redis
+    release: {{ .Release.Name }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.redis.persistence.storageClass }}
+  storageClassName: {{ .Values.redis.persistence.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.redis.persistence.size }}
+---
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
