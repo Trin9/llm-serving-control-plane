@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -121,7 +122,30 @@ type RedisBillingService struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	failOpen bool // If true, allow requests when Redis is down (degradation)
+
+	// Minimum-viable compensation queue: usage records that failed to settle due
+	// to transient Redis errors are retried in the background. The usage:req
+	// idempotency key makes retries safe (no double deduction).
+	retryMu     sync.Mutex
+	retryQueue  []*retryEntry
+	retryStopCh chan struct{}
+	retryWg     sync.WaitGroup
 }
+
+// retryEntry is a queued usage record awaiting settlement retry.
+type retryEntry struct {
+	record   UsageRecord
+	attempts int
+	nextAt   time.Time
+}
+
+const (
+	// ledgerTTLSeconds is the retention for the durable usage ledger (90 days).
+	ledgerTTLSeconds = 7776000
+	// retryInterval / retryMaxAttempts bound the compensation retry window (~1h).
+	retryInterval    = 30 * time.Second
+	retryMaxAttempts = 120
+)
 
 // NewRedisBillingService creates a Redis-based billing service
 // redisAddr: Redis connection address (e.g., "localhost:6379")
@@ -139,10 +163,11 @@ func NewRedisBillingService(redisAddr, redisPassword string, failOpen bool) *Red
 	})
 
 	return &RedisBillingService{
-		client:   client,
-		ctx:      ctx,
-		cancel:   cancel,
-		failOpen: failOpen,
+		client:      client,
+		ctx:         ctx,
+		cancel:      cancel,
+		failOpen:    failOpen,
+		retryStopCh: make(chan struct{}),
 	}
 }
 
@@ -167,10 +192,21 @@ func (s *RedisBillingService) Start() {
 	} else {
 		log.Println("💰 [BILLING] Redis billing service started")
 	}
+
+	// Background retry worker (minimum-viable compensation for transient Redis outages).
+	if s.retryStopCh == nil {
+		s.retryStopCh = make(chan struct{})
+	}
+	s.retryWg.Add(1)
+	go s.retryLoop()
 }
 
 // Stop gracefully closes the Redis connection
 func (s *RedisBillingService) Stop() {
+	if s.retryStopCh != nil {
+		close(s.retryStopCh)
+		s.retryWg.Wait()
+	}
 	s.cancel()
 	if err := s.client.Close(); err != nil {
 		log.Printf("⚠️ [BILLING] Error closing Redis connection: %v", err)
@@ -258,7 +294,8 @@ func (s *RedisBillingService) CheckQuota(orgID, projectID string, estimatedToken
 	return nil
 }
 
-// ReportUsage atomically deducts tokens using Lua script with idempotency and ledger persistence
+// ReportUsage atomically deducts tokens using Lua script with idempotency and ledger persistence.
+// Deferred records (e.g. upstream_error) are persisted as pending ledger entries without deduction.
 func (s *RedisBillingService) ReportUsage(record UsageRecord) error {
 	// Skip deduction if token count is 0 or negative
 	if record.TotalTokens <= 0 {
@@ -267,6 +304,36 @@ func (s *RedisBillingService) ReportUsage(record UsageRecord) error {
 		return nil
 	}
 
+	// Deferred settlement: persist a pending ledger entry, no quota deduction.
+	if record.Deferred {
+		if err := s.recordDeferred(record); err != nil {
+			s.enqueueRetry(record)
+			if s.failOpen {
+				log.Printf("⚠️ [BILLING] Deferred ledger write failed, queued for retry (fail-open): %v", err)
+				return nil
+			}
+			return err
+		}
+		return nil
+	}
+
+	err := s.executeOnce(record)
+	if err == nil || errors.Is(err, ErrAlreadyProcessed) {
+		return err
+	}
+
+	// Transient Redis failure: queue for background retry so usage is not silently
+	// lost. The usage:req idempotency key makes retries safe (no double deduction).
+	s.enqueueRetry(record)
+	if s.failOpen {
+		log.Printf("⚠️ [BILLING] Redis error during deduction, queued for retry (fail-open): %v", err)
+		return nil
+	}
+	return err
+}
+
+// executeOnce runs the atomic deduction Lua script exactly once and parses its result.
+func (s *RedisBillingService) executeOnce(record UsageRecord) error {
 	// Execute Lua script atomically
 	result, err := s.client.Eval(s.ctx, luaDeductQuota, []string{},
 		record.RequestID,
@@ -283,10 +350,6 @@ func (s *RedisBillingService) ReportUsage(record UsageRecord) error {
 	).Result()
 
 	if err != nil {
-		if s.failOpen {
-			log.Printf("⚠️ [BILLING] Redis error during deduction, fail-open mode: %v", err)
-			return nil
-		}
 		return fmt.Errorf("lua script failed: %w", err)
 	}
 
@@ -312,6 +375,96 @@ func (s *RedisBillingService) ReportUsage(record UsageRecord) error {
 		return ErrAlreadyProcessed
 	default:
 		return fmt.Errorf("unknown lua script result: code=%d, message=%s", code, message)
+	}
+}
+
+// recordDeferred persists a pending ledger entry for records that must not be
+// settled yet (e.g. upstream_error). No quota is deducted and the usage:req
+// idempotency key is intentionally NOT set, so a later settlement can still
+// deduct through the normal path once the case has been reviewed.
+func (s *RedisBillingService) recordDeferred(record UsageRecord) error {
+	key := fmt.Sprintf("usage:ledger:%s", record.RequestID)
+	fields := map[string]interface{}{
+		"request_id":        record.RequestID,
+		"trace_id":          record.TraceID,
+		"model":             record.Model,
+		"org_id":            record.OrgID,
+		"project_id":        record.ProjectID,
+		"prompt_tokens":     record.PromptTokens,
+		"completion_tokens": record.CompletionTokens,
+		"total_tokens":      record.TotalTokens,
+		"usage_source":      record.UsageSource,
+		"request_status":    record.RequestStatus,
+		"state":             "pending",
+		"timestamp":         record.Timestamp.Format(time.RFC3339),
+	}
+	if err := s.client.HSet(s.ctx, key, fields).Err(); err != nil {
+		return fmt.Errorf("deferred ledger write failed: %w", err)
+	}
+	_ = s.client.Expire(s.ctx, key, time.Duration(ledgerTTLSeconds)*time.Second).Err() // best effort; 90d
+	log.Printf("⏸ [BILLING] Deferred (status=%s): Request=%s, Tokens=%d, Source=%s → ledger state=pending (no quota deduction)",
+		record.RequestStatus, record.RequestID, record.TotalTokens, record.UsageSource)
+	return nil
+}
+
+// enqueueRetry appends a record to the in-memory retry queue.
+func (s *RedisBillingService) enqueueRetry(record UsageRecord) {
+	s.retryMu.Lock()
+	defer s.retryMu.Unlock()
+	s.retryQueue = append(s.retryQueue, &retryEntry{record: record, nextAt: time.Now().Add(retryInterval)})
+}
+
+// retryLoop periodically re-attempts queued settlements.
+func (s *RedisBillingService) retryLoop() {
+	defer s.retryWg.Done()
+	ticker := time.NewTicker(retryInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.retryStopCh:
+			return
+		case now := <-ticker.C:
+			s.retryDue(now)
+		}
+	}
+}
+
+// retryDue attempts to settle every queued record whose backoff has elapsed.
+func (s *RedisBillingService) retryDue(now time.Time) {
+	s.retryMu.Lock()
+	pending := s.retryQueue
+	s.retryQueue = nil
+	s.retryMu.Unlock()
+
+	var keep []*retryEntry
+	for _, item := range pending {
+		if item.nextAt.After(now) {
+			keep = append(keep, item)
+			continue
+		}
+		var err error
+		if item.record.Deferred {
+			err = s.recordDeferred(item.record)
+		} else {
+			err = s.executeOnce(item.record)
+		}
+		switch {
+		case err == nil || errors.Is(err, ErrAlreadyProcessed):
+			log.Printf("✅ [BILLING] Retry settled: Request=%s (attempt %d)", item.record.RequestID, item.attempts+1)
+		default:
+			item.attempts++
+			if item.attempts >= retryMaxAttempts {
+				log.Printf("🔥 [BILLING] Retry exhausted for Request=%s after %d attempts: %v", item.record.RequestID, item.attempts, err)
+				continue
+			}
+			item.nextAt = now.Add(retryInterval)
+			keep = append(keep, item)
+		}
+	}
+	if len(keep) > 0 {
+		s.retryMu.Lock()
+		s.retryQueue = append(s.retryQueue, keep...)
+		s.retryMu.Unlock()
 	}
 }
 

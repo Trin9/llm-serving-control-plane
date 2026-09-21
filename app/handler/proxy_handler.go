@@ -161,6 +161,43 @@ func PhaseSSEDataAndReport(line []byte, stats *TokenStats) bool {
 	return false
 }
 
+// ParseJSONUsage extracts official token usage from a non-streaming
+// OpenAI/vLLM-style JSON response body (top-level "usage" object with
+// prompt_tokens / completion_tokens / total_tokens).
+func ParseJSONUsage(body []byte, stats *TokenStats) bool {
+	// Fast path: only attempt full JSON parsing when a usage field is present.
+	if !bytes.Contains(body, []byte(`"usage"`)) {
+		return false
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		fmt.Printf("⚠️ WARN: Failed to parse non-stream JSON with usage: %v\n", err)
+		return false
+	}
+
+	usage, ok := payload["usage"].(map[string]any)
+	if !ok {
+		return false
+	}
+
+	if promptTokens, ok := usage["prompt_tokens"].(float64); ok {
+		stats.promptTokens = int(promptTokens)
+	}
+	if completionTokens, ok := usage["completion_tokens"].(float64); ok {
+		stats.completionTokens = int(completionTokens)
+	}
+	if totalTokens, ok := usage["total_tokens"].(float64); ok {
+		stats.tokenCount = int(totalTokens)
+	} else if stats.completionTokens > 0 {
+		stats.tokenCount = stats.promptTokens + stats.completionTokens
+	}
+	if stats.tokenCount > 0 {
+		stats.usageSource = "official"
+	}
+	return stats.tokenCount > 0
+}
+
 // ProxyHandlerFactory returns a gin.HandlerFunc with injected BillingService and Router
 func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -275,9 +312,12 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 			return
 		}
 
+		// Distinguish SSE streaming responses from plain JSON responses.
+		isSSE := strings.Contains(resp.Header.Get("Content-Type"), "event-stream")
+
 		// For successful 2xx SSE streams, add extra streaming response headers.
 		// Fix SSE headers and chunked behavior to avoid setting them twice.
-		if strings.Contains(resp.Header.Get("Content-Type"), "event-stream") {
+		if isSSE {
 			c.Writer.Header().Set("Cache-Control", "no-cache")
 			c.Writer.Header().Set("Connection", "keep-alive")
 			c.Writer.Header().Set("Transfer-Encoding", "chunked") // explicitly enable chunked transfer
@@ -285,45 +325,68 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 
 		c.Writer.WriteHeader(resp.StatusCode) // write the upstream 2xx status code
 
-		// E. Core loop: read the vLLM stream and write it back to the client in real time
-		// Use a 32KB reader buffer to reduce syscall count
-		reader := bufio.NewReaderSize(resp.Body, 32*1024)
 		requestStatus := "completed"
 
-		for {
-			// Use ReadBytes('\n') so each read returns a complete line.
-			// This lets PhaseSSEDataAndReport accurately detect the "data: " prefix and "usage" field.
-			line, err := reader.ReadBytes('\n')
-			if err != nil {
-				if err != io.EOF {
-					fmt.Printf("🔥 ERROR reading from vLLM: %v\n", err)
-				}
-				// Handle any trailing data (if the stream did not end with \n)
-				if len(line) > 0 {
-					PhaseSSEDataAndReport(line, stats)
-					if _, wErr := c.Writer.Write(line); wErr != nil {
-						requestStatus = "client_disconnected"
+		if isSSE {
+			// E1. Core loop: read the vLLM stream and write it back to the client in real time
+			// Use a 32KB reader buffer to reduce syscall count
+			reader := bufio.NewReaderSize(resp.Body, 32*1024)
+
+			for {
+				// Use ReadBytes('\n') so each read returns a complete line.
+				// This lets PhaseSSEDataAndReport accurately detect the "data: " prefix and "usage" field.
+				line, err := reader.ReadBytes('\n')
+				if err != nil {
+					if err != io.EOF {
+						// Upstream terminated the stream abnormally (e.g. vLLM pod killed
+						// mid-stream -> io.ErrUnexpectedEOF / connection reset). Mark the
+						// request as failed so billing records it as pending instead of
+						// settling it as a clean "completed".
+						requestStatus = "upstream_error"
+						fmt.Printf("🔥 ERROR reading from vLLM (upstream_error): %v\n", err)
 					}
-					c.Writer.Flush()
+					// Handle any trailing data (if the stream did not end with \n)
+					if len(line) > 0 {
+						PhaseSSEDataAndReport(line, stats)
+						if _, wErr := c.Writer.Write(line); wErr != nil {
+							requestStatus = "client_disconnected"
+						}
+						c.Writer.Flush()
+					}
+					break
 				}
-				break
-			}
 
-			if len(line) == 0 {
-				continue
-			}
+				if len(line) == 0 {
+					continue
+				}
 
-			// Inspect the SSE data line and update metric statistics
-			PhaseSSEDataAndReport(line, stats)
+				// Inspect the SSE data line and update metric statistics
+				PhaseSSEDataAndReport(line, stats)
 
-			// Write back to the client in real time
-			_, err = c.Writer.Write(line)
-			if err != nil {
-				// Client disconnected
-				requestStatus = "client_disconnected"
-				break
+				// Write back to the client in real time
+				_, err = c.Writer.Write(line)
+				if err != nil {
+					// Client disconnected
+					requestStatus = "client_disconnected"
+					break
+				}
+				c.Writer.Flush() // critical: flush immediately, otherwise the frontend won't see the streaming (typewriter) effect
 			}
-			c.Writer.Flush() // critical: flush immediately, otherwise the frontend won't see the streaming (typewriter) effect
+		} else {
+			// E2. Non-streaming 2xx response (application/json): read the full body,
+			// pass it through, and parse the top-level "usage" object for billing.
+			bodyBytes, readErr := io.ReadAll(resp.Body)
+			if readErr != nil && readErr != io.EOF {
+				requestStatus = "upstream_error"
+				fmt.Printf("🔥 ERROR reading from vLLM (non-stream): %v\n", readErr)
+			}
+			if len(bodyBytes) > 0 {
+				ParseJSONUsage(bodyBytes, stats)
+				if _, wErr := c.Writer.Write(bodyBytes); wErr != nil {
+					requestStatus = "client_disconnected"
+				}
+				c.Writer.Flush()
+			}
 		}
 
 		// Stream finished, record TPOT metrics
@@ -349,7 +412,11 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 				TotalTokens:      stats.tokenCount,
 				UsageSource:      usageSource,
 				RequestStatus:    requestStatus,
-				Timestamp:        time.Now(),
+				// Upstream errors are not settled immediately: the billing backend
+				// records a pending ledger entry without deducting quota so the case
+				// can be audited / settled / refunded later (closeout-final policy).
+				Deferred:  requestStatus == "upstream_error",
+				Timestamp: time.Now(),
 			}
 			// Non-blocking call, won't affect HTTP response time
 			if err := billingSvc.ReportUsage(record); err != nil {

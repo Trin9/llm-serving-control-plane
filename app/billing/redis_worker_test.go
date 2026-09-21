@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -230,4 +231,100 @@ func TestRedisBillingService_RefundUsageIsAtomic(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1000, orgQuota)
 	assert.Equal(t, 1000, projectQuota)
+}
+
+// TestRedisBillingService_DeferredWritesPendingLedger verifies the closeout-final
+// settlement policy for upstream_error requests: a ledger entry is written with
+// state=pending, quota is NOT deducted, and no idempotency key is set (so the
+// case can be settled/refunded later through the normal path).
+func TestRedisBillingService_DeferredWritesPendingLedger(t *testing.T) {
+	svc, mr := setupTestRedis(t)
+	defer mr.Close()
+
+	orgID := "org-1"
+	projID := "proj-1"
+	reqID := "req-deferred-1"
+	require.NoError(t, svc.SetOrgQuota(orgID, 1000))
+	require.NoError(t, svc.SetProjectQuota(projID, 500))
+
+	record := UsageRecord{
+		RequestID:     reqID,
+		Model:         "Qwen/Qwen2.5-0.5B-Instruct",
+		OrgID:         orgID,
+		ProjectID:     projID,
+		TotalTokens:   1147,
+		UsageSource:   "estimated",
+		RequestStatus: "upstream_error",
+		Deferred:      true,
+	}
+
+	require.NoError(t, svc.ReportUsage(record))
+
+	// Ledger exists, marked pending, and NOT billed.
+	ledger, err := svc.GetUsageLedger(reqID)
+	require.NoError(t, err)
+	assert.Equal(t, "pending", ledger["state"])
+	assert.Equal(t, "upstream_error", ledger["request_status"])
+	assert.Equal(t, "1147", ledger["total_tokens"])
+
+	// Quota must not be touched.
+	orgQuota, _ := svc.GetOrgQuota(orgID)
+	projQuota, _ := svc.GetProjectQuota(projID)
+	assert.Equal(t, 1000, orgQuota)
+	assert.Equal(t, 500, projQuota)
+
+	// No idempotency key (allows later settlement); ledger TTL ~90d.
+	assert.False(t, mr.Exists("usage:req:"+reqID))
+	ttl := mr.TTL("usage:ledger:" + reqID)
+	assert.True(t, ttl > 89*24*time.Hour, "ledger TTL should be ~90d, got %v", ttl)
+}
+
+// TestRedisBillingService_QueuesWhenRedisDown verifies that a transient Redis
+// failure queues the usage record for retry instead of silently dropping it.
+func TestRedisBillingService_QueuesWhenRedisDown(t *testing.T) {
+	svc, mr := setupTestRedis(t)
+	mr.Close() // simulate Redis outage
+
+	svc.failOpen = true
+	record := UsageRecord{RequestID: "req-down-1", OrgID: "org-1", ProjectID: "proj-1", TotalTokens: 42}
+
+	err := svc.ReportUsage(record)
+	assert.NoError(t, err, "fail-open must not return an error to the caller")
+	assert.Len(t, svc.retryQueue, 1, "record must be queued for retry")
+}
+
+// TestRedisBillingService_RetrySettlesAfterRecovery verifies the compensation
+// path end-to-end: a queued record settles exactly once when Redis is back,
+// and an idempotency replay of the same request is not double-charged.
+func TestRedisBillingService_RetrySettlesAfterRecovery(t *testing.T) {
+	svc, mr := setupTestRedis(t)
+	defer mr.Close()
+
+	orgID := "org-1"
+	projID := "proj-1"
+	reqID := "req-retry-1"
+	require.NoError(t, svc.SetOrgQuota(orgID, 1000))
+	require.NoError(t, svc.SetProjectQuota(projID, 500))
+
+	svc.enqueueRetry(UsageRecord{
+		RequestID:     reqID,
+		OrgID:         orgID,
+		ProjectID:     projID,
+		TotalTokens:   100,
+		RequestStatus: "completed",
+	})
+
+	// Redis is reachable again by the time the retry fires.
+	svc.retryDue(time.Now().Add(2 * retryInterval))
+
+	orgQuota, _ := svc.GetOrgQuota(orgID)
+	assert.Equal(t, 900, orgQuota, "retry must settle exactly once")
+	ledger, _ := svc.GetUsageLedger(reqID)
+	assert.Equal(t, "billed", ledger["state"])
+	assert.Empty(t, svc.retryQueue, "queue must be drained after successful retry")
+
+	// A second pass is a no-op.
+	svc.retryDue(time.Now().Add(4 * retryInterval))
+	orgQuota, _ = svc.GetOrgQuota(orgID)
+	assert.Equal(t, 900, orgQuota)
 }

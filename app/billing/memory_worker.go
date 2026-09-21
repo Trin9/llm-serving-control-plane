@@ -75,6 +75,14 @@ func (s *MemoryBillingService) processQueue() {
 
 // handleRecord performs the actual business logic (simulated billing).
 func (s *MemoryBillingService) handleRecord(record UsageRecord) {
+	// Deferred records (e.g. upstream_error) are not settled; the memory backend
+	// has no ledger, so it only records the event in the log.
+	if record.Deferred {
+		log.Printf("⏸ [BILLING] Deferred record (status=%s): Request=%s, Tokens=%d (memory backend: log only)",
+			record.RequestStatus, record.RequestID, record.TotalTokens)
+		return
+	}
+
 	// Simulate cost calculation: assume $0.000002 / token
 	cost := float64(record.TotalTokens) * 0.000002
 

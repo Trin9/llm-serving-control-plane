@@ -484,3 +484,84 @@ func TestProxyHandlerFactory_InvalidAPIKey(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), "Invalid or expired token/API key")
 }
+
+// TestProxyHandlerFactory_NonStreamUsageBilled verifies that non-streaming JSON
+// responses are parsed for top-level "usage" and billed with official tokens
+// (closeout-final fix: previously SSE-only parsing meant non-stream = no billing).
+func TestProxyHandlerFactory_NonStreamUsageBilled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"id":"cmpl-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":11,"total_tokens":18}}`)
+	}))
+	defer upstreamServer.Close()
+
+	mockBilling := new(MockBillingService)
+	var captured billing.UsageRecord
+	mockBilling.On("ReportUsage", mock.AnythingOfType("billing.UsageRecord")).Return(nil).Run(func(args mock.Arguments) {
+		captured = args.Get(0).(billing.UsageRecord)
+	})
+
+	mockRouter := new(MockRouter)
+	mockRouter.On("Route", mock.Anything).Return(upstreamServer.URL)
+
+	router := gin.New()
+	router.POST("/v1/chat/completions", ProxyHandlerFactory(mockBilling, mockRouter))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"test-model"}`))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"usage"`) // body still passed through
+	mockBilling.AssertCalled(t, "ReportUsage", mock.AnythingOfType("billing.UsageRecord"))
+	assert.Equal(t, 18, captured.TotalTokens)
+	assert.Equal(t, 7, captured.PromptTokens)
+	assert.Equal(t, 11, captured.CompletionTokens)
+	assert.Equal(t, "official", captured.UsageSource)
+	assert.Equal(t, "completed", captured.RequestStatus)
+	assert.False(t, captured.Deferred)
+}
+
+// TestProxyHandlerFactory_UpstreamTruncatedStream verifies that a stream cut off
+// by the upstream (truncated body -> unexpected EOF) is marked as "upstream_error"
+// and reported as Deferred (pending ledger entry, no immediate settlement).
+func TestProxyHandlerFactory_UpstreamTruncatedStream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// Declare more bytes than we will actually write, so the client observes a
+		// truncated body (io.ErrUnexpectedEOF) — this simulates a vLLM pod being
+		// killed mid-stream (observed in D5: "unexpected EOF").
+		w.Header().Set("Content-Length", "4096")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" wor\"}}]}\n\n")
+		// Return without completing the declared Content-Length.
+	}))
+	defer upstreamServer.Close()
+
+	mockBilling := new(MockBillingService)
+	var captured billing.UsageRecord
+	mockBilling.On("ReportUsage", mock.AnythingOfType("billing.UsageRecord")).Return(nil).Run(func(args mock.Arguments) {
+		captured = args.Get(0).(billing.UsageRecord)
+	})
+
+	mockRouter := new(MockRouter)
+	mockRouter.On("Route", mock.Anything).Return(upstreamServer.URL)
+
+	router := gin.New()
+	router.POST("/v1/chat/completions", ProxyHandlerFactory(mockBilling, mockRouter))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"test-model"}`))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	mockBilling.AssertCalled(t, "ReportUsage", mock.AnythingOfType("billing.UsageRecord"))
+	assert.Equal(t, "upstream_error", captured.RequestStatus)
+	assert.True(t, captured.Deferred, "upstream_error must be deferred (pending, not settled)")
+	assert.Greater(t, captured.TotalTokens, 0, "partial chunks should still be accounted")
+}

@@ -24,11 +24,17 @@ type UsageRecord struct {
 	UsageSource string `json:"usage_source"`
 
 	// RequestStatus records how the upstream request finished:
-	// "completed", "client_disconnected", "upstream_failed", or "timed_out".
+	// "completed", "client_disconnected", "upstream_error", or "timed_out".
 	RequestStatus string `json:"request_status"`
 
+	// Deferred marks a usage record that must NOT be settled immediately.
+	// It is used for upstream_error requests: the billing backend records the
+	// entry as state="pending" without deducting quota, so the case can be
+	// audited and settled/refunded later (closeout-final policy).
+	Deferred bool `json:"deferred"`
+
 	// State is the settlement state of this ledger entry:
-	// "billed", "refunded". It is set by the billing backend.
+	// "billed", "pending", "refunded". It is set by the billing backend.
 	State     string    `json:"state"`
 	Timestamp time.Time `json:"timestamp"`
 }
