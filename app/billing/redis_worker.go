@@ -63,7 +63,9 @@ redis.call("HSET", ledger_key,
 	"state", "billed",
 	"timestamp", timestamp
 )
-redis.call("EXPIRE", ledger_key, 86400)
+-- Ledger retained 90 days for audit/settlement/refund (closeout: 24h -> 90d).
+-- The idempotency key (usage:req:*) intentionally stays at 24h.
+redis.call("EXPIRE", ledger_key, 7776000)
 
 return {1, "success"}
 `
