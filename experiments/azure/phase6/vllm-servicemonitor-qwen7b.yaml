@@ -1,0 +1,17 @@
+# Phase 6 P6-B: per-pod vLLM metrics for qwen7b-service (sibling of
+# test/vllm-servicemonitor.yaml, which only covers qwen-service).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: qwen7b-service-vllm
+  namespace: default
+  labels:
+    app.kubernetes.io/component: inference-metrics
+spec:
+  selector:
+    matchLabels:
+      serving.trin.io/inferenceservice: qwen7b-service
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

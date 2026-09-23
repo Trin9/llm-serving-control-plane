@@ -1,0 +1,11 @@
+{
+  "model": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Write a detailed 400-word story about a robot learning to paint, then explain its artistic style."
+    }
+  ],
+  "max_tokens": 512,
+  "stream": true
+}

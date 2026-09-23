@@ -1,0 +1,29 @@
+# Phase 6 P6-B: KEDA ScaledObject for qwen7b-service.
+#
+# Threshold calibration: the "48 running requests" value used by the 0.5B
+# service (test/keda-scaledobject.yaml) is a 0.5B-specific knee. This manifest
+# starts from the same value and MUST be corrected in-window after the 7B
+# capacity sweep (keda-observe.sh) - see the P6-B validation checklist item
+# "threshold backfilled from measurement".
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: qwen7b-service-vllm-queue
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: serving.trin.io/v1
+    kind: InferenceService
+    name: qwen7b-service
+  minReplicaCount: 1
+  maxReplicaCount: 2
+  # NOTE: pollingInterval/cooldownPeriod are ignored by KEDA when
+  # minReplicaCount >= 1; scale-down pacing follows the HPA default 300s
+  # stabilization window.
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://monitoring-stack-kube-prom-prometheus.monitoring.svc:9090
+        metricName: vllm7b_requests_running
+        query: sum(vllm:num_requests_running{service="qwen7b-service"})
+        threshold: "48" # PLACEHOLDER - backfill from the 7B knee measurement

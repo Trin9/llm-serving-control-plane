@@ -1,0 +1,35 @@
+# Phase 6 P6-B: Qwen2.5-7B-Instruct-AWQ on a single T4 (NC4as_T4_v3).
+#
+# * resourceProfile gpu-t4-7b = 1 GPU / 2 CPU / 16Gi (T-B0) - the 12Gi
+#   gpu-t4-small profile is too tight for 7B-class AWQ weights + KV cache.
+# * extraArgs pin quantization/memory knobs so the OOM-fallback story is
+#   explicit: if 16Gi (allocatable ~20Gi) is still not enough, iterate
+#   --gpu-memory-utilization down (0.9 -> 0.85) and record it in the execution
+#   record instead of silently changing the profile.
+apiVersion: serving.trin.io/v1
+kind: InferenceService
+metadata:
+  # Must match experiments/azure/phase6/vllm-servicemonitor-qwen7b.yaml's selector
+  name: qwen7b-service
+  namespace: default
+spec:
+  modelName: "Qwen/Qwen2.5-7B-Instruct-AWQ"
+  engine: "vllm"
+  image: "llmphase5eaacr.azurecr.io/vllm/vllm-openai:latest"
+  imagePullPolicy: "IfNotPresent"
+  resourceProfile: "gpu-t4-7b"
+  replicas: 1
+  extraArgs:
+    - "--quantization"
+    - "awq"
+    - "--max-model-len"
+    - "4096"
+    - "--gpu-memory-utilization"
+    - "0.9"
+  nodeSelector:
+    agentpool: gputest
+  tolerations:
+    - key: "kubernetes.azure.com/scalesetpriority"
+      operator: "Equal"
+      value: "spot"
+      effect: "NoSchedule"

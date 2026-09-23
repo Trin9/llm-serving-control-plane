@@ -1,0 +1,73 @@
+# Phase 6 P6-A trial job: runs one prefix-ab-loadgen.py trial inside the cluster
+# (no port-forward in the measured path). Placeholders are substituted by
+# scripts/phase6-ab-driver.sh:
+#   __NAME__         job name, e.g. p6a-prefix_hash-16000c-p1-t1
+#   __SEED__         trial seed embedded in every prompt prefix
+#   __PREFIX_CHARS__ system prompt length in characters
+#   __PREFIXES__     number of distinct hot prefixes (1 = single shared prefix)
+#   __TOTAL__        requests per trial
+#   __CONC__         concurrency
+#   __MAX_TOKENS__   max new tokens per request
+#
+# The loadgen script is mounted from ConfigMap "phase6-prefix-ab-src" (created
+# by the driver from experiments/azure/phase6/prefix-ab-loadgen.py).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __NAME__
+  namespace: default
+  labels:
+    app: phase6-prefix-ab
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: phase6-prefix-ab
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.azure.com/agentpool: nodepool1
+      containers:
+        - name: loadgen
+          image: llmphase5eaacr.azurecr.io/python:3.12-slim
+          command: ["python3", "/src/prefix-ab-loadgen.py"]
+          args:
+            - --url
+            - http://llm-operator-gate-service.default.svc.cluster.local:8080/v1/chat/completions
+            - --model
+            - Qwen/Qwen2.5-0.5B-Instruct
+            - --seed
+            - "__SEED__"
+            - --prefix-chars
+            - "__PREFIX_CHARS__"
+            - --prefixes
+            - "__PREFIXES__"
+            - --total
+            - "__TOTAL__"
+            - --concurrency
+            - "__CONC__"
+            - --max-tokens
+            - "__MAX_TOKENS__"
+          env:
+            - name: TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: loadgen-token
+                  key: TOKEN
+          volumeMounts:
+            - name: src
+              mountPath: /src
+          resources:
+            requests:
+              cpu: 500m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+      volumes:
+        - name: src
+          configMap:
+            name: phase6-prefix-ab-src

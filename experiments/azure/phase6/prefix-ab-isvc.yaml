@@ -1,0 +1,35 @@
+# Phase 6 P6-A: qwen-service used for the prefix-aware routing A/B.
+#
+# Differences vs experiments/azure/inferenceservice-real-vllm-ea.yaml:
+#   * replicas: 2              two T4 nodes so routing can spread or pin
+#   * extraArgs: --enable-prefix-caching   (T-A1 passthrough)
+#
+# IMPORTANT (execution note, verified in phase 5 E5): the KEDA ScaledObject
+# "qwen-service-vllm-queue" owns spec.replicas while it exists - delete it
+# before applying this manifest, otherwise the HPA reverts replicas to 1.
+apiVersion: serving.trin.io/v1
+kind: InferenceService
+metadata:
+  # Must match test/vllm-servicemonitor.yaml's selector
+  # (serving.trin.io/inferenceservice: qwen-service)
+  name: qwen-service
+  namespace: default
+spec:
+  modelName: "Qwen/Qwen2.5-0.5B-Instruct"
+  engine: "vllm"
+  image: "llmphase5eaacr.azurecr.io/vllm/vllm-openai:latest"
+  imagePullPolicy: "IfNotPresent"
+  resourceProfile: "gpu-t4-small"
+  replicas: 2
+  # Phase 6 T-A1: pass the prefix-caching flag through to the vLLM CLI. vLLM V1
+  # enables prefix caching by default, but the A/B must make the setting
+  # explicit and visible in the generated Deployment args.
+  extraArgs:
+    - "--enable-prefix-caching"
+  nodeSelector:
+    agentpool: gputest
+  tolerations:
+    - key: "kubernetes.azure.com/scalesetpriority"
+      operator: "Equal"
+      value: "spot"
+      effect: "NoSchedule"

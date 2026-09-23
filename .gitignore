@@ -58,3 +58,6 @@ helm/monitoring-stack/charts/*.tgz
 artifacts/
 
 
+
+# Python bytecode caches (agents/scripts)
+__pycache__/
