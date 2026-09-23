@@ -63,11 +63,15 @@ bootstrap() {
   # 0.5B sibling service for the cold-start comparison (P6-B comparison table).
   kubectl apply -f "$REPO_ROOT/experiments/azure/phase6/prefix-ab-isvc.yaml" | tee "$ART_DIR/isvc05-apply.txt"
 
+  # Give the operator a moment to materialise the Deployments before waiting.
+  for _ in $(seq 1 30); do
+    kubectl get deploy qwen7b-service -n "$NS" >/dev/null 2>&1 && break
+    sleep 2
+  done
+
   log "waiting for qwen7b-service pod (30 min budget: download + load)"
-  kubectl wait --for=condition=ready pod -l serving.trin.io/inferenceservice=qwen7b-service \
-    -n "$NS" --timeout=1800s | tee "$ART_DIR/qwen7b-ready.txt"
-  kubectl wait --for=condition=ready pod -l serving.trin.io/inferenceservice=qwen-service \
-    -n "$NS" --timeout=600s | tee "$ART_DIR/qwen05-ready.txt"
+  kubectl rollout status deployment/qwen7b-service -n "$NS" --timeout=1800s | tee "$ART_DIR/qwen7b-ready.txt"
+  kubectl rollout status deployment/qwen-service -n "$NS" --timeout=900s | tee "$ART_DIR/qwen05-ready.txt"
   kubectl get pods -n "$NS" -o wide | grep -E 'qwen' | tee "$ART_DIR/pods.txt"
 
   kubectl get deploy qwen7b-service -n "$NS" -o yaml > "$ART_DIR/qwen7b-deployment.yaml"
@@ -149,22 +153,77 @@ sweep() { # capacity sweep 8/16/32/64 concurrency
 }
 
 keda() {
+  # Quota reality (2026-09-23): the Standard NCASv3_T4 family quota in eastasia
+  # allows at most 2× NC4as_T4_v3 (8 vCPU / 4 per node). The 0.5B sibling must
+  # be removed so the 7B scale-out has a free GPU node to land on.
+  log "releasing the 0.5B node (deleting qwen-service) so 7B scale-out can schedule"
+  kubectl delete -f "$REPO_ROOT/experiments/azure/phase6/prefix-ab-isvc.yaml" --ignore-not-found \
+    | tee "$ART_DIR/keda-release-05b.txt"
+  kubectl wait --for=delete pod -l serving.trin.io/inferenceservice=qwen-service -n "$NS" --timeout=300s \
+    >> "$ART_DIR/keda-release-05b.txt" 2>&1 || true
+
   log "applying 7B KEDA ScaledObject"
   kubectl apply -f "$REPO_ROOT/experiments/azure/phase6/keda-scaledobject-qwen7b.yaml" | tee "$ART_DIR/keda-apply.txt"
   kubectl get scaledobject qwen7b-service-vllm-queue -n "$NS" -o yaml > "$ART_DIR/keda-scaledobject.yaml" || true
   local token
   token="$(kubectl get secret loadgen-token -n "$NS" -o jsonpath='{.data.TOKEN}' | base64 -d)"
-  log "driving load to push running > threshold (concurrency ${KEDA_CONC:-128})"
+  log "driving in-cluster load to push running > threshold (concurrency ${KEDA_CONC:-64})"
+  # NOTE: >=32 concurrent streams cannot go through kubectl port-forward (it
+  # resets connections); the drill load runs inside the cluster instead.
+  cat <<YAML | kubectl apply -f - >/dev/null
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: p6b-keda-load
+  namespace: ${NS}
+  labels: {app: phase6-g2-keda}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 1800
+  template:
+    metadata:
+      labels: {app: phase6-g2-keda}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: loadgen
+          image: llmphase5eaacr.azurecr.io/python:3.12-slim
+          command: ["python3", "/src/loadgen.py"]
+          args:
+            - --url
+            - http://llm-operator-gate-service.default.svc.cluster.local:8080/v1/chat/completions
+            - --model
+            - Qwen/Qwen2.5-7B-Instruct-AWQ
+            - --concurrency
+            - "${KEDA_CONC:-64}"
+            - --duration
+            - "300"
+            - --max-tokens
+            - "512"
+          env:
+            - name: TOKEN
+              valueFrom:
+                secretKeyRef: {name: loadgen-token, key: TOKEN}
+          volumeMounts:
+            - {name: src, mountPath: /src}
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits: {cpu: "2", memory: 1Gi}
+      volumes:
+        - name: src
+          configMap: {name: loadgen-src}
+YAML
   (
-    for _ in $(seq 1 160); do
-      echo "$(date -u +%FT%TZ) running=$(prom 'sum(vllm:num_requests_running{service="qwen7b-service"})') waiting=$(prom 'sum(vllm:num_requests_waiting{service="qwen7b-service"})') hpa=$(kubectl get hpa -n $NS -o name 2>/dev/null | grep qwen7b | head -1) spec=$(kubectl get inferenceservice qwen7b-service -n $NS -o jsonpath='{.spec.replicas}' 2>/dev/null) cur=$(kubectl get deployment qwen7b-service -n $NS -o jsonpath='{.status.replicas}' 2>/dev/null)"
+    for _ in $(seq 1 90); do
+      echo "$(date -u +%FT%TZ) running=$(prom 'sum(vllm:num_requests_running{service="qwen7b-service"})') waiting=$(prom 'sum(vllm:num_requests_waiting{service="qwen7b-service"})') spec=$(kubectl get inferenceservice qwen7b-service -n "$NS" -o jsonpath='{.spec.replicas}' 2>/dev/null) deploy=$(kubectl get deployment qwen7b-service -n "$NS" -o jsonpath='{.status.replicas}' 2>/dev/null) ready=$(kubectl get deployment qwen7b-service -n "$NS" -o jsonpath='{.status.readyReplicas}' 2>/dev/null) hpa=$(kubectl get hpa -n "$NS" --no-headers 2>/dev/null | grep qwen7b | awk '{print $4"->"$5}')"
       sleep 5
     done
   ) > "$ART_DIR/keda-observe.txt" 2>&1 &
   local sampler=$!
-  TOKEN="$token" GATE_URL="$GATE_URL" "$REPO_ROOT/scripts/run-stress-test.sh" \
-    -c "${KEDA_CONC:-128}" -n $(( ${KEDA_CONC:-128} * 4 )) -b "$REPO_ROOT/test/stress-test-body-qwen7b.json" \
-    > "$ART_DIR/keda-load.txt" 2>&1 || true
+  kubectl wait --for=condition=complete job/p6b-keda-load -n "$NS" --timeout=900s >/dev/null 2>&1 || true
+  kubectl logs job/p6b-keda-load -n "$NS" > "$ART_DIR/keda-load.txt" 2>&1 || true
+  pkill -f "p6b-keda-load" 2>/dev/null || true
   kill "$sampler" 2>/dev/null || true
   kubectl get hpa -n "$NS" > "$ART_DIR/keda-hpa.txt" 2>&1 || true
   kubectl get events -n "$NS" --sort-by=.lastTimestamp | grep -iE 'hpa|keda|qwen7b' | tail -40 > "$ART_DIR/keda-events.txt" 2>&1 || true
@@ -191,6 +250,9 @@ close() {
   az aks stop -g "$RG" -n "$AKS" -o none
   pkill -f 'kubectl port-forward' || true
   az aks show -g "$RG" -n "$AKS" --query powerState.code -o tsv | tee "$ART_DIR/powerstate.txt"
+  # Post-stop verification: control plane must be Stopped and the GPU pool empty.
+  az aks nodepool show -g "$RG" --cluster-name "$AKS" -n gputest --query count -o tsv \
+    | tee "$ART_DIR/gputest-count.txt"
   log "G2 window closed"
 }
 

@@ -105,6 +105,9 @@ def do_request(i: int, warmup: bool) -> None:
         "max_tokens": args.max_tokens,
         "temperature": 0,
         "stream": True,
+        # vLLM only attaches the usage object to the final SSE chunk when this
+        # is set; the per-request prompt-token count is part of the evidence.
+        "stream_options": {"include_usage": True},
     }
     req = urllib.request.Request(
         args.url,

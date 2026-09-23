@@ -1,10 +1,15 @@
 # Phase 6 P6-B: KEDA ScaledObject for qwen7b-service.
 #
-# Threshold calibration: the "48 running requests" value used by the 0.5B
-# service (test/keda-scaledobject.yaml) is a 0.5B-specific knee. This manifest
-# starts from the same value and MUST be corrected in-window after the 7B
-# capacity sweep (keda-observe.sh) - see the P6-B validation checklist item
-# "threshold backfilled from measurement".
+# Threshold calibration (measured 2026-09-23, G2 window):
+#   The 0.5B value (48) does not apply to the 7B on a T4. Measured sweep
+#   (in-cluster loadgen, 512-token completions):
+#     c=8  -> TTFT p50 0.24s, ~300 tok/s aggregate (GPU already 100%)
+#     c=16 -> TTFT p50 0.38s, ~443 tok/s   <- latency knee
+#     c=32 -> TTFT p50 0.69s, ~605 tok/s
+#     c=64 -> TTFT p50 1.33s, ~748 tok/s
+#   Per-stream TTFT triples between c=16 and c=64 while aggregate throughput
+#   only grows 1.7x, so the latency knee is ~16 concurrent requests.
+#   threshold = 75% of the knee = 12 running requests.
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
@@ -26,4 +31,4 @@ spec:
         serverAddress: http://monitoring-stack-kube-prom-prometheus.monitoring.svc:9090
         metricName: vllm7b_requests_running
         query: sum(vllm:num_requests_running{service="qwen7b-service"})
-        threshold: "48" # PLACEHOLDER - backfill from the 7B knee measurement
+        threshold: "12" # measured: 75% of the ~16-concurrent latency knee

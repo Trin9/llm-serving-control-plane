@@ -83,7 +83,8 @@ prom_instant() { # <query> <outfile>
 }
 
 snapshot() { # <tag>
-  local tag="$1" dir="$SNAP_DIR/$tag"
+  local tag="$1"
+  local dir="$SNAP_DIR/$tag"
   mkdir -p "$dir"
   local i=0 q
   for q in "${QUERIES[@]}"; do
@@ -157,8 +158,11 @@ ensure_job_source() {
 
 # ---------------------------------------------------------------------- Trial --
 run_trial() { # <strategy> <size> <prefixes> <trial_no>
-  local strat="$1" size="$2" prefixes="$3" t="$4"
-  local name="p6a-${strat//-/_}-${size}c-p${prefixes}-t${t}"
+  local strat="$1"
+  local size="$2"
+  local prefixes="$3"
+  local t="$4"
+  local name="p6a-${strat}-${size}c-p${prefixes}-t${t}"
   local seed="${RUN_ID}-${strat}-${size}-${prefixes}-${t}"
   log "trial start: $name (seed=$seed)"
 
