@@ -181,7 +181,7 @@ func TestKubernetesBackendSource_DiscoverByModelUsesServiceNameAndLabels(t *test
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"items": []map[string]any{{
 					"metadata": map[string]any{
-						"name": "model-a",
+						"name":   "model-a",
 						"labels": map[string]string{"llm-model": "model-a"},
 					},
 				}},
@@ -258,4 +258,104 @@ func TestKubernetesBackendSource_DiscoverByModelIgnoresUnlabelledEndpoints(t *te
 	backends, err := source.DiscoverByModel()
 	require.NoError(t, err)
 	assert.Empty(t, backends)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 (T-A2): routing strategy switch (prefix-hash vs random)
+// ---------------------------------------------------------------------------
+
+// prefixHashBody is a request whose feature hash is stable across calls: the
+// system message is constant and extractFeature only reads model + prior
+// messages (truncated to 200 chars).
+const prefixHashBody = `{"model":"Qwen/Qwen2.5-0.5B-Instruct","messages":[{"role":"system","content":"You are a helpful assistant. SHARED-SYSTEM-PREFIX-0123456789"},{"role":"user","content":"Question #1"}]}`
+
+func TestNormalizeStrategy(t *testing.T) {
+	tests := []struct {
+		in     string
+		want   string
+		wantOK bool
+	}{
+		{in: "", want: StrategyPrefixHash, wantOK: true},
+		{in: "prefix-hash", want: StrategyPrefixHash, wantOK: true},
+		{in: " prefix-hash ", want: StrategyPrefixHash, wantOK: true},
+		{in: "RANDOM", want: StrategyRandom, wantOK: true},
+		{in: "random", want: StrategyRandom, wantOK: true},
+		{in: "bogus", want: StrategyPrefixHash, wantOK: false},
+	}
+	for _, tc := range tests {
+		got, ok := NormalizeStrategy(tc.in)
+		assert.Equal(t, tc.want, got, "input %q", tc.in)
+		assert.Equal(t, tc.wantOK, ok, "input %q", tc.in)
+	}
+}
+
+func TestConsistentHashRouter_PrefixHashPinsSameFeatureToOneBackend(t *testing.T) {
+	router := NewConsistentHashRouter([]string{
+		"http://a:8000/v1/chat/completions",
+		"http://b:8000/v1/chat/completions",
+	})
+	assert.Equal(t, StrategyPrefixHash, router.Strategy(), "prefix-hash is the default strategy")
+
+	first := router.Route([]byte(prefixHashBody))
+	require.NotEmpty(t, first)
+	for i := 0; i < 200; i++ {
+		assert.Equal(t, first, router.Route([]byte(prefixHashBody)),
+			"same prompt prefix must always route to the same backend")
+	}
+}
+
+func TestConsistentHashRouter_RandomSpreadsSameFeatureAcrossBackends(t *testing.T) {
+	router := NewConsistentHashRouter([]string{
+		"http://a:8000/v1/chat/completions",
+		"http://b:8000/v1/chat/completions",
+	})
+	router.SetStrategy(StrategyRandom)
+	assert.Equal(t, StrategyRandom, router.Strategy())
+
+	counts := map[string]int{}
+	for i := 0; i < 400; i++ {
+		counts[router.Route([]byte(prefixHashBody))]++
+	}
+	require.Len(t, counts, 2, "random strategy must reach both backends")
+	// 400 uniform draws: floor of 120 is ~8 sigma below the 200 mean, so a
+	// healthy RNG never trips this.
+	for url, n := range counts {
+		assert.Greater(t, n, 120, "backend %s received %d/400 draws", url, n)
+	}
+}
+
+func TestConsistentHashRouter_RandomWithNoBackendsReturnsEmpty(t *testing.T) {
+	router := NewConsistentHashRouter(nil)
+	router.SetStrategy(StrategyRandom)
+	assert.Empty(t, router.Route([]byte(prefixHashBody)))
+}
+
+func TestModelConsistentHashRouter_StrategyInheritedByExistingAndFuturePools(t *testing.T) {
+	router := NewModelConsistentHashRouter(nil)
+	router.UpdateModelBackends(map[string][]string{
+		"model-a": {"http://a1:8000/v1/chat/completions", "http://a2:8000/v1/chat/completions"},
+	})
+
+	// Flip to random after the pool already exists: it must apply to that pool.
+	router.SetStrategy(StrategyRandom)
+	assert.Equal(t, StrategyRandom, router.Strategy())
+
+	bodyA := []byte(`{"model":"model-a","messages":[{"role":"user","content":"same body"}]}`)
+	countsA := map[string]int{}
+	for i := 0; i < 400; i++ {
+		countsA[router.Route(bodyA)]++
+	}
+	require.Len(t, countsA, 2, "existing pool must follow the strategy switch")
+
+	// A pool registered AFTER the switch must inherit random as well.
+	router.RegisterModelBackends("model-b", []string{
+		"http://b1:8000/v1/chat/completions",
+		"http://b2:8000/v1/chat/completions",
+	})
+	bodyB := []byte(`{"model":"model-b","messages":[{"role":"user","content":"same body"}]}`)
+	countsB := map[string]int{}
+	for i := 0; i < 400; i++ {
+		countsB[router.Route(bodyB)]++
+	}
+	require.Len(t, countsB, 2, "new pool must inherit the active strategy")
 }

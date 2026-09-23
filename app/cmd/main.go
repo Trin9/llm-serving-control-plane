@@ -5,6 +5,7 @@ import (
 	"gate-service/app/billing"
 	"gate-service/app/handler"
 	"gate-service/app/middleware"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -72,6 +73,19 @@ func main() {
 			routerSvc.UpdateModelBackends(modelBackends)
 		}
 	}
+
+	// Phase 6 (T-A2): routing strategy switch for the KV-cache routing A/B.
+	// ROUTER_STRATEGY=prefix-hash (default) routes by prompt-prefix consistent
+	// hash so same-prefix requests reuse one backend's prefix cache;
+	// ROUTER_STRATEGY=random spreads uniformly (A/B baseline). Invalid values
+	// fall back to the default with a warning.
+	routerStrategy, strategyValid := handler.NormalizeStrategy(os.Getenv("ROUTER_STRATEGY"))
+	if !strategyValid {
+		log.Printf("WARN: invalid ROUTER_STRATEGY=%q, falling back to %q", os.Getenv("ROUTER_STRATEGY"), routerStrategy)
+	}
+	routerSvc.SetStrategy(routerStrategy)
+	log.Printf("gateway routing strategy: %s", routerStrategy)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	handler.StartBackendRefresh(ctx, backendSource, routerSvc, 30*time.Second)
