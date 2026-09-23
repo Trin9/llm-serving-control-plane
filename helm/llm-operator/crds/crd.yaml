@@ -980,6 +980,16 @@ spec:
                 - tensorrt
                 - mock
                 type: string
+              extraArgs:
+                description: |-
+                  ExtraArgs appends engine CLI flags after the controller-generated defaults
+                  (Phase 6, T-A1). Typical use: "--enable-prefix-caching" for vLLM, or
+                  "--quantization","awq" for AWQ checkpoints. Flags are appended in order, so
+                  a later flag overrides an earlier duplicate. Unsupported flags make the
+                  engine exit at startup — validate against the engine version in use.
+                items:
+                  type: string
+                type: array
               image:
                 description: |-
                   Image allows custom container image override (optional)

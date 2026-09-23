@@ -284,6 +284,12 @@ func (r *InferenceServiceReconciler) buildContainer(inferSvc *servingv1.Inferenc
 	// Get the engine configuration (image and arguments)
 	image, args := r.getEngineConfig(engine, inferSvc.Spec.ModelName)
 
+	// Phase 6 (T-A1): append user-provided engine flags after the controller
+	// defaults so experiments can toggle engine features (e.g. prefix caching for
+	// the routing A/B, or AWQ quantization for 7B models) without patching the
+	// controller. getEngineConfig returns a fresh slice, so append is safe.
+	args = append(args, inferSvc.Spec.ExtraArgs...)
+
 	// If the user specified a custom image, use theirs
 	if inferSvc.Spec.Image != "" {
 		image = inferSvc.Spec.Image

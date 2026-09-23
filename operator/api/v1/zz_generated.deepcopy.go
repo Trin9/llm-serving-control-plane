@@ -96,8 +96,8 @@ func (in *InferenceServiceSpec) DeepCopyInto(out *InferenceServiceSpec) {
 	if in.NodeSelector != nil {
 		in, out := &in.NodeSelector, &out.NodeSelector
 		*out = make(map[string]string, len(*in))
-		for key, value := range *in {
-			(*out)[key] = value
+		for key, val := range *in {
+			(*out)[key] = val
 		}
 	}
 	if in.Tolerations != nil {
@@ -111,6 +111,11 @@ func (in *InferenceServiceSpec) DeepCopyInto(out *InferenceServiceSpec) {
 		in, out := &in.Affinity, &out.Affinity
 		*out = new(corev1.Affinity)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.ExtraArgs != nil {
+		in, out := &in.ExtraArgs, &out.ExtraArgs
+		*out = make([]string, len(*in))
+		copy(*out, *in)
 	}
 }
 

@@ -75,6 +75,14 @@ type InferenceServiceSpec struct {
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
 	// +optional
 	ImagePullPolicy string `json:"imagePullPolicy,omitempty"`
+
+	// ExtraArgs appends engine CLI flags after the controller-generated defaults
+	// (Phase 6, T-A1). Typical use: "--enable-prefix-caching" for vLLM, or
+	// "--quantization","awq" for AWQ checkpoints. Flags are appended in order, so
+	// a later flag overrides an earlier duplicate. Unsupported flags make the
+	// engine exit at startup — validate against the engine version in use.
+	// +optional
+	ExtraArgs []string `json:"extraArgs,omitempty"`
 }
 
 // InferenceServiceStatus defines the observed state of InferenceService.
