@@ -94,6 +94,8 @@ gate-service:
     # You can globally override the gateway routing backend addresses here
     VLLM_URLS: "http://mock-service.default.svc.cluster.local:8000/v1/chat/completions"
     REDIS_ADDR: "llm-operator-redis.default.svc.cluster.local:6379"
+    # Phase 6 (T-A2): prefix-hash (default) | random (KV-cache routing A/B baseline).
+    ROUTER_STRATEGY: "prefix-hash"
 
 redis:
   enabled: true

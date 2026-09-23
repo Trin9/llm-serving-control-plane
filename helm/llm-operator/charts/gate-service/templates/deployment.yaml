@@ -45,6 +45,11 @@ spec:
               value: {{ .Values.env.VLLM_URLS | quote }}
             - name: REDIS_ADDR
               value: {{ .Values.env.REDIS_ADDR | quote }}
+            {{- with .Values.env.ROUTER_STRATEGY }}
+            # Phase 6 (T-A2): prefix-hash (default) or random (A/B baseline).
+            - name: ROUTER_STRATEGY
+              value: {{ . | quote }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /health

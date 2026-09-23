@@ -21,6 +21,11 @@ nodeSelector:
 gate-service:
   nodeSelector:
     kubernetes.azure.com/agentpool: nodepool1
+  env:
+    existingSecret: llm-operator-gate-env
+    # Phase 6 (T-A2): default is prefix-hash; the P6-A A/B flips this to random
+    # via `--set gate-service.env.ROUTER_STRATEGY=random` and reverts after.
+    ROUTER_STRATEGY: prefix-hash
 
 redis:
   nodeSelector:
