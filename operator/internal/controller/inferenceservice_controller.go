@@ -259,6 +259,15 @@ func resourceProfileFor(profile string) resourceProfile {
 			cpu:    "2",
 			memory: "12Gi",
 		}
+	case "gpu-t4-7b":
+		// Phase 6 (T-B0): same NC4as_T4_v3 node as gpu-t4-small, with a larger
+		// memory budget for 7B-class AWQ checkpoints (weights + KV cache +
+		// activation headroom) that do not fit the 12Gi profile.
+		return resourceProfile{
+			gpu:    1,
+			cpu:    "2",
+			memory: "16Gi",
+		}
 	case "cpu-only":
 		return resourceProfile{
 			gpu:    0,

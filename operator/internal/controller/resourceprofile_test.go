@@ -23,6 +23,7 @@ func TestResourceProfileFor(t *testing.T) {
 		{name: "gpu-medium", profile: "gpu-medium", gpu: 1, cpu: "8", memory: "64Gi", hasGPU: true},
 		{name: "gpu-large", profile: "gpu-large", gpu: 2, cpu: "16", memory: "128Gi", hasGPU: true},
 		{name: "gpu-t4-small", profile: "gpu-t4-small", gpu: 1, cpu: "2", memory: "12Gi", hasGPU: true},
+		{name: "gpu-t4-7b", profile: "gpu-t4-7b", gpu: 1, cpu: "2", memory: "16Gi", hasGPU: true},
 		{name: "cpu-only", profile: "cpu-only", gpu: 0, cpu: "2", memory: "8Gi", hasGPU: false},
 	}
 
