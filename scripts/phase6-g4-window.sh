@@ -19,6 +19,18 @@
 # =============================================================================
 set -euo pipefail
 
+# The az CLI lives in a user-local prefix ($HOME/azcli/bin); VS Code task
+# shells may start without it on PATH. Add it defensively.
+if ! command -v az >/dev/null 2>&1; then
+  for d in "$HOME/azcli/bin" "/usr/local/bin" "/opt/az/bin" "/snap/bin"; do
+    if [[ -x "$d/az" ]]; then
+      export PATH="$d:$PATH"
+      break
+    fi
+  done
+fi
+command -v az >/dev/null 2>&1 || echo "WARN: az CLI not found on PATH (az-dependent steps will fail)" >&2
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENVFILE="${PHASE6_G4_ENV:-/tmp/phase6-g4.env}"
 # shellcheck disable=SC1090
@@ -67,8 +79,14 @@ submit_job() { # name split conc dur maxa maxb label
 }
 
 wait_job() { # name timeout_seconds
-  kubectl wait --for=condition=complete "job/$1" -n "$NS" --timeout="$2" >/dev/null 2>&1 || \
-    kubectl wait --for=condition=failed "job/$1" -n "$NS" --timeout=10s >/dev/null 2>&1 || true
+  kubectl wait --for=condition=complete "job/$1" -n "$NS" --timeout="${2}s" >/dev/null 2>&1 || true
+  # hard fallback: poll completion state in case the watch errored
+  for _ in $(seq 1 120); do
+    local ok
+    ok="$(kubectl get job "$1" -n "$NS" -o jsonpath='{.status.succeeded}' 2>/dev/null || true)"
+    [[ "$ok" == "1" ]] && break
+    sleep 5
+  done
 }
 
 start_sampler() { # outfile service count
@@ -261,24 +279,44 @@ coldstart_one() { # service tag
   local svc="$1" tag="$2" D="$ART_DIR/coldstart"
   mkdir -p "$D"
   kubectl delete pod -l "serving.trin.io/inferenceservice=$svc" -n "$NS" --wait=false > "$D/$tag.delete.txt" 2>&1 || true
-  local pod="" t0 t1 rd creation
+  local pod="" t0 t1 rd creation readyt
+  # pick a pod that is NOT terminating (kubectl jsonpath filters cannot compare
+  # to null reliably; do the filtering in python)
   for _ in $(seq 1 60); do
-    pod="$(kubectl get pods -n "$NS" -l "serving.trin.io/inferenceservice=$svc" \
-      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+    pod="$(kubectl get pods -n "$NS" -l "serving.trin.io/inferenceservice=$svc" -o json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for it in d.get("items", []):
+    if "deletionTimestamp" not in it["metadata"]:
+        print(it["metadata"]["name"])
+        break
+' 2>/dev/null || true)"
     [[ -n "$pod" ]] && break
     sleep 2
   done
-  # time from the POD's own creationTimestamp so the number matches the
-  # coldstart parser's rel_s timeline (pod-create -> Ready).
   creation="$(kubectl get pod "$pod" -n "$NS" -o jsonpath='{.metadata.creationTimestamp}' 2>/dev/null || true)"
-  t0="$(date -u -d "$creation" +%s 2>/dev/null || date -u +%s)"
+  if [[ -n "$creation" ]]; then
+    t0="$(date -u -d "$creation" +%s 2>/dev/null || date -u +%s)"
+  else
+    t0="$(date -u +%s)"
+  fi
   echo "pod=$pod creation=$creation t0=$t0" > "$D/$tag.timing.txt"
   kubectl wait --for=condition=ready "pod/$pod" -n "$NS" --timeout=1800s >> "$D/$tag.timing.txt" 2>&1 || true
   t1="$(date -u +%s)"
   echo "ready_after=$((t1 - t0))s" | tee -a "$D/$tag.timing.txt"
+  # precise number from the pod object: Ready condition lastTransitionTime - creationTimestamp
+  readyt="$(kubectl get pod "$pod" -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].lastTransitionTime}' 2>/dev/null || true)"
+  if [[ -n "$creation" && -n "$readyt" ]]; then
+    rd="$(( $(date -u -d "$readyt" +%s) - $(date -u -d "$creation" +%s) ))"
+    echo "ready_after_object=$((rd))s (creation -> Ready lastTransitionTime)" | tee -a "$D/$tag.timing.txt"
+  else
+    rd="$(sed -n 's/ready_after=\([0-9]*\)s/\1/p' "$D/$tag.timing.txt" | tail -1)"
+  fi
   kubectl get pod "$pod" -n "$NS" -o yaml > "$D/$tag.pod.yaml" 2>&1 || true
   kubectl logs "pod/$pod" -n "$NS" > "$D/$tag.container.log" 2>&1 || true
-  rd="$(sed -n 's/ready_after=\([0-9]*\)s/\1/p' "$D/$tag.timing.txt" | tail -1)"
   python3 "$REPO_ROOT/scripts/phase6-coldstart-parse.py" --pod "$D/$tag.pod.yaml" \
     --log "$D/$tag.container.log" --label "$tag" --ready-seconds "${rd:-0}" \
     --json-out "$D/$tag.stages.json" > "$D/$tag.stages.md" 2>&1 || true
