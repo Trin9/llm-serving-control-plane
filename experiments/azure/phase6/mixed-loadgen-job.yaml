@@ -1,0 +1,73 @@
+# Phase 6 G4 mixed-model load job (rendered by scripts/phase6-g4-window.sh).
+#
+# Placeholders (sed-substituted by the window script):
+#   __NAME__      job name
+#   __SPLIT__     a:b worker split (e.g. 2:1 / 1:0 / 0:1)
+#   __CONC__      total concurrency
+#   __DURATION__  load duration seconds
+#   __DEADLINE__  activeDeadlineSeconds (duration + 300)
+#   __MAXA__      max_tokens for model A (0.5B)
+#   __MAXB__      max_tokens for model B (7B AWQ)
+#   __RID__       X-Request-Id prefix (unique per run; used for Redis ledger scans)
+#   __LABEL__     label echoed into stats output
+#
+# The loadgen script is mounted from ConfigMap "phase6-mixed-src" (created by
+# the window bootstrap step from experiments/azure/phase6/mixed-loadgen.py).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __NAME__
+  namespace: default
+  labels:
+    app: phase6-g4-mixed
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: __DEADLINE__
+  ttlSecondsAfterFinished: 7200
+  template:
+    metadata:
+      labels:
+        app: phase6-g4-mixed
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: loadgen
+          image: llmphase5eaacr.azurecr.io/python:3.12-slim
+          command: ["python3", "/src/mixed-loadgen.py"]
+          args:
+            - --url
+            - http://llm-operator-gate-service.default.svc.cluster.local:8080/v1/chat/completions
+            - --split
+            - "__SPLIT__"
+            - --concurrency
+            - "__CONC__"
+            - --duration
+            - "__DURATION__"
+            - --max-tokens-a
+            - "__MAXA__"
+            - --max-tokens-b
+            - "__MAXB__"
+            - --rid-prefix
+            - "__RID__"
+            - --label
+            - "__LABEL__"
+          env:
+            - name: TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: loadgen-token
+                  key: TOKEN
+          volumeMounts:
+            - name: src
+              mountPath: /src
+          resources:
+            requests:
+              cpu: 500m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+      volumes:
+        - name: src
+          configMap:
+            name: phase6-mixed-src
