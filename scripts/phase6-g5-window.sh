@@ -179,33 +179,55 @@ for r in json.load(sys.stdin):
   log "bootstrap done (RIDP=$RIDP)"
 }
 
+a_run_arm() { # R
+  local R="$1" D="$ART_DIR/A" S
+  mkdir -p "$D"
+  log "A: replicas=$R (192c, max_tokens=128, dur=120)"
+  scale_05b "$R" | tee "$D/r$R-scale.txt"
+  pods_snapshot | tee "$D/r$R-pods.txt"
+  S="$(start_sampler "$D/r$R-samples.txt" qwen-service 30)"
+  submit_job "p6g5-a-r$R" 1:0 192 120 128 512 "a-r$R" | tee "$D/r$R-apply.txt"
+  sleep 30
+  curl -s -m 6 --get "$PROM_URL/api/v1/query" --data-urlencode \
+    'query=sum by (pod) (rate(vllm:request_success_total{service="qwen-service"}[1m]))' \
+    > "$D/r$R-pod-rps.json" || true
+  wait_job "p6g5-a-r$R" 600
+  kill "$S" 2>/dev/null || true
+  kubectl logs "job/p6g5-a-r$R" -n "$NS" > "$D/r$R-load.txt" 2>&1 || true
+  grep -h '^SUMMARY' "$D/r$R-load.txt" >> "$D/summaries.txt" 2>/dev/null || true
+}
+
+a_finalize() {
+  local D="$ART_DIR/A"
+  log "A: restore prefix-hash + 1 replica"
+  scale_05b 1 | tail -1
+  set_strategy prefix-hash | tail -2 | tee "$D/strategy-restore.txt"
+  cat "$D/summaries.txt" || true
+}
+
 drive_a() {
   local D="$ART_DIR/A"
   mkdir -p "$D"
   log "A: set ROUTER_STRATEGY=random"
   set_strategy random | tail -2 | tee "$D/strategy-random.txt"
   kubectl delete scaledobject qwen-service-vllm-queue -n "$NS" --ignore-not-found >/dev/null 2>&1 || true
-  local R S
-  for R in 1 2 3 4; do
-    log "A: replicas=$R (192c, max_tokens=128, dur=120)"
-    scale_05b "$R" | tee "$D/r$R-scale.txt"
-    pods_snapshot | tee "$D/r$R-pods.txt"
-    S="$(start_sampler "$D/r$R-samples.txt" qwen-service 30)"
-    submit_job "p6g5-a-r$R" 1:0 192 120 128 512 "a-r$R" | tee "$D/r$R-apply.txt"
-    sleep 30
-    curl -s -m 10 --get "$PROM_URL/api/v1/query" --data-urlencode \
-      'query=sum by (pod) (rate(vllm:request_success_total{service="qwen-service"}[1m]))' \
-      > "$D/r$R-pod-rps.json"
-    wait_job "p6g5-a-r$R" 600
-    kill "$S" 2>/dev/null || true
-    kubectl logs "job/p6g5-a-r$R" -n "$NS" > "$D/r$R-load.txt" 2>&1 || true
-    grep -h '^SUMMARY' "$D/r$R-load.txt" >> "$D/summaries.txt" 2>/dev/null || true
-  done
-  log "A: restore prefix-hash + 1 replica"
-  scale_05b 1 | tail -1
-  set_strategy prefix-hash | tail -2 | tee "$D/strategy-restore.txt"
-  cat "$D/summaries.txt" || true
+  local R
+  for R in 1 2 3 4; do a_run_arm "$R"; done
+  a_finalize
   log "A done"
+}
+
+drive_a_resume() {
+  local D="$ART_DIR/A"
+  mkdir -p "$D"
+  log "A resume: redo arms 3 and 4"
+  set_strategy random | tail -1
+  kubectl delete job p6g5-a-r3 p6g5-a-r4 -n "$NS" --ignore-not-found || true
+  kubectl delete scaledobject qwen-service-vllm-queue -n "$NS" --ignore-not-found >/dev/null 2>&1 || true
+  a_run_arm 3
+  a_run_arm 4
+  a_finalize
+  log "A resume done"
 }
 
 apply_sos() {
@@ -353,6 +375,71 @@ drive_c() {
   log "C done"
 }
 
+drive_c1_redo() {
+  local D="$ART_DIR/C"
+  mkdir -p "$D"
+  log "C1 redo: force exactly 1 replica, then burst 192c (min=1 elasticity)"
+  kubectl delete scaledobject qwen-service-vllm-queue -n "$NS" --ignore-not-found >/dev/null 2>&1 || true
+  kubectl scale inferenceservice/qwen-service -n "$NS" --replicas=1
+  kubectl rollout status deployment/qwen-service -n "$NS" --timeout=600s | tail -1
+  kubectl apply -f "$REPO_ROOT/test/keda-scaledobject.yaml" | tee "$D/min1-redo-so.txt"
+  # wait HPA settle at current=1
+  for _ in $(seq 1 36); do
+    local cur
+    cur="$(kubectl get hpa keda-hpa-qwen-service-vllm-queue -n "$NS" -o jsonpath='{.status.currentReplicas}' 2>/dev/null || echo '?')"
+    echo "$(date -u +%FT%TZ) cur=$cur" >> "$D/min1-redo-hpa-wait.txt"
+    [[ "$cur" == "1" ]] && break
+    sleep 5
+  done
+  pods_snapshot | tee "$D/min1-redo-pods.txt"
+  local bstart S
+  bstart="$(date -u +%s)"
+  echo "burst_start=$bstart min=1-redo" | tee "$D/min1-redo-burst.txt"
+  S="$(start_sampler "$D/min1-redo-samples.txt" qwen-service 50)"
+  submit_job p6g5-c-min1-redo 1:0 192 180 64 512 c-min1-redo | tee "$D/min1-redo-apply.txt"
+  wait_job p6g5-c-min1-redo 600
+  kill "$S" 2>/dev/null || true
+  kubectl logs job/p6g5-c-min1-redo -n "$NS" > "$D/min1-redo-load.txt" 2>&1 || true
+  hpa_snapshot | tee "$D/min1-redo-hpa-post.txt"
+  pods_snapshot | tee "$D/min1-redo-pods-post.txt"
+  grep -h '^SUMMARY' "$D/min1-redo-load.txt" | tee "$D/min1-redo-summary.txt" || true
+  python3 "$REPO_ROOT/scripts/phase6-g5-analyze.py" --log "$D/min1-redo-load.txt" \
+    --burst-start "$bstart" --slo-ms 100 --out "$D/min1-redo-slo.md" | tee "$D/min1-redo-slo.md" || true
+  kubectl patch scaledobject qwen-service-vllm-queue -n "$NS" --type merge \
+    -p '{"spec":{"minReplicaCount":1,"maxReplicaCount":2}}' | tee "$D/min1-redo-restore.txt"
+  log "C1 redo done"
+}
+
+drive_c1_clean() {
+  local D="$ART_DIR/C"
+  mkdir -p "$D"
+  log "C1-clean: fixed 1 replica (no KEDA), burst 192c = pure min=1 SLO baseline"
+  kubectl delete scaledobject qwen-service-vllm-queue -n "$NS" --ignore-not-found >/dev/null 2>&1 || true
+  kubectl scale inferenceservice/qwen-service -n "$NS" --replicas=1
+  kubectl rollout status deployment/qwen-service -n "$NS" --timeout=600s | tail -1
+  # ensure exactly one ready pod and no warming extras
+  for _ in $(seq 1 60); do
+    local ready
+    ready="$(kubectl get pods -n "$NS" -l serving.trin.io/inferenceservice=qwen-service -o jsonpath='{range .items[?(@.status.containerStatuses[0].ready==true)]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -c . || true)"
+    echo "$(date -u +%FT%TZ) ready=$ready" >> "$D/min1-clean-wait.txt"
+    [[ "$ready" == "1" ]] && break
+    sleep 5
+  done
+  pods_snapshot | tee "$D/min1-clean-pods.txt"
+  local bstart S
+  bstart="$(date -u +%s)"
+  echo "burst_start=$bstart min=1-clean" | tee "$D/min1-clean-burst.txt"
+  S="$(start_sampler "$D/min1-clean-samples.txt" qwen-service 50)"
+  submit_job p6g5-c-min1-clean 1:0 192 180 64 512 c-min1-clean | tee "$D/min1-clean-apply.txt"
+  wait_job p6g5-c-min1-clean 600
+  kill "$S" 2>/dev/null || true
+  kubectl logs job/p6g5-c-min1-clean -n "$NS" > "$D/min1-clean-load.txt" 2>&1 || true
+  grep -h '^SUMMARY' "$D/min1-clean-load.txt" | tee "$D/min1-clean-summary.txt" || true
+  python3 "$REPO_ROOT/scripts/phase6-g5-analyze.py" --log "$D/min1-clean-load.txt" \
+    --burst-start "$bstart" --slo-ms 100 --out "$D/min1-clean-slo.md" | tee "$D/min1-clean-slo.md" || true
+  log "C1-clean done"
+}
+
 close() {
   local D="$ART_DIR/close"
   mkdir -p "$D"
@@ -385,10 +472,14 @@ close() {
 case "${1:-}" in
   bootstrap) bootstrap ;;
   drive-a) drive_a ;;
+  drive-a-resume) drive_a_resume ;;
+  drive-a-r4) a_run_arm 4; a_finalize; log "A r4 done" ;;
   drive-b1) drive_b1 ;;
   drive-b2) drive_b2 ;;
   drive-b3) drive_b3 ;;
   drive-c) drive_c ;;
+  drive-c1-redo) drive_c1_redo ;;
+  drive-c1-clean) drive_c1_clean ;;
   close) close ;;
   *) echo "usage: $0 bootstrap|drive-a|drive-b1|drive-b2|drive-b3|drive-c|close"; exit 1 ;;
 esac
