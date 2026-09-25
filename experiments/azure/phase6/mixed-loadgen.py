@@ -114,7 +114,7 @@ def worker(tag: str, idx: int) -> None:
         )
         t0 = time.time()
         rec = {"model": tag, "rid": rid, "ok": False, "code": None,
-               "ttft": None, "total": None, "complete": False}
+               "ttft": None, "total": None, "complete": False, "t0": round(t0, 3)}
         try:
             with urllib.request.urlopen(req, timeout=args.timeout) as resp:
                 rec["code"] = resp.getcode()
