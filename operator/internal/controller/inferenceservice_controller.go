@@ -180,6 +180,16 @@ func (r *InferenceServiceReconciler) buildDeployment(inferSvc *servingv1.Inferen
 		"app.kubernetes.io/part-of":        "llm-serving-control-plane",
 	}
 
+	// Phase 6 (T-F5): Deployment.spec.selector is immutable in Kubernetes. It must
+	// therefore only reference STABLE keys that never change when spec.modelName is
+	// mutated. The full label set (including llm-model/serving.trin.io/model) stays
+	// on the object metadata and Pod template so gateway discovery (which reads the
+	// model label off Service labels) and observability keep working.
+	selectorLabels := map[string]string{
+		"app":                              inferSvc.Name,
+		"serving.trin.io/inferenceservice": inferSvc.Name,
+	}
+
 	// Default to 1 replica
 	replicas := int32(1)
 	if inferSvc.Spec.Replicas != nil {
@@ -215,7 +225,7 @@ func (r *InferenceServiceReconciler) buildDeployment(inferSvc *servingv1.Inferen
 			Replicas: &replicas,
 			Strategy: strategy,
 			Selector: &metav1.LabelSelector{
-				MatchLabels: labels,
+				MatchLabels: selectorLabels,
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
@@ -432,15 +442,33 @@ func (r *InferenceServiceReconciler) reconcileService(ctx context.Context, infer
 		return err
 	}
 
-	changed := !reflect.DeepEqual(existing.Labels, service.Labels) ||
-		!reflect.DeepEqual(existing.Spec.Selector, service.Spec.Selector) ||
+	selectorChanged := !reflect.DeepEqual(existing.Spec.Selector, service.Spec.Selector)
+	changed := selectorChanged ||
+		!reflect.DeepEqual(existing.Labels, service.Labels) ||
 		!reflect.DeepEqual(existing.Spec.Ports, service.Spec.Ports)
 	if !changed {
 		return nil
 	}
 
+	// Service.spec.selector is immutable in Kubernetes. The T-F5 fix moves the
+	// model label out of the selector, so a pre-existing Service built with the old
+	// selector can no longer be updated in place — recreate it instead.
+	if selectorChanged {
+		logger.Info("Service selector changed (immutable), recreating Service", "name", service.Name)
+		if err := r.Delete(ctx, &existing); err != nil && !errors.IsNotFound(err) {
+			return err
+		}
+		if err := r.Create(ctx, service); err != nil {
+			if errors.IsAlreadyExists(err) {
+				// Delete is asynchronous; the next reconcile pass will create it.
+				return nil
+			}
+			return err
+		}
+		return nil
+	}
+
 	existing.Labels = service.Labels
-	existing.Spec.Selector = service.Spec.Selector
 	existing.Spec.Ports = service.Spec.Ports
 	logger.Info("Updating Service", "name", service.Name)
 	return r.Update(ctx, &existing)
@@ -460,6 +488,15 @@ func (r *InferenceServiceReconciler) buildService(inferSvc *servingv1.InferenceS
 		"app.kubernetes.io/part-of":        "llm-serving-control-plane",
 	}
 
+	// Phase 6 (T-F5): Service.spec.selector is immutable too. Select on stable keys
+	// only; the model label stays on the Service's own metadata for gateway
+	// discovery (KubernetesBackendSource.DiscoverByModel reads llm-model off the
+	// Service labels, not the selector).
+	selectorLabels := map[string]string{
+		"app":                              inferSvc.Name,
+		"serving.trin.io/inferenceservice": inferSvc.Name,
+	}
+
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      inferSvc.Name,
@@ -467,7 +504,7 @@ func (r *InferenceServiceReconciler) buildService(inferSvc *servingv1.InferenceS
 			Labels:    labels,
 		},
 		Spec: corev1.ServiceSpec{
-			Selector: labels,
+			Selector: selectorLabels,
 			Ports: []corev1.ServicePort{
 				{
 					Name:       "http",

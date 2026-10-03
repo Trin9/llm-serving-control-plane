@@ -1004,7 +1004,11 @@ spec:
                 - IfNotPresent
                 type: string
               modelName:
-                description: ModelName is the name of the model to serve (e.g., "Qwen/Qwen2.5-7B-Instruct")
+                description: |-
+                  ModelName is the name of the model to serve (e.g., "Qwen/Qwen2.5-7B-Instruct").
+                  Mutable (Phase 6, T-F5): changing it triggers a rolling rebuild of the backing
+                  Deployment. The Deployment/Service selectors only reference stable keys, so
+                  Kubernetes accepts the update in place.
                 minLength: 1
                 type: string
               nodeSelector:

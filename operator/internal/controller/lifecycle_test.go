@@ -36,11 +36,11 @@ func TestEvaluateLifecycle(t *testing.T) {
 			deployment: &appsv1.Deployment{Status: appsv1.DeploymentStatus{
 				ReadyReplicas: 1, AvailableReplicas: 1,
 			}},
-			replicas:   3,
-			reason:     "DeploymentProgressing",
-			ready:      metav1.ConditionFalse,
-			available:  metav1.ConditionTrue,
-			degraded:   metav1.ConditionFalse,
+			replicas:  3,
+			reason:    "DeploymentProgressing",
+			ready:     metav1.ConditionFalse,
+			available: metav1.ConditionTrue,
+			degraded:  metav1.ConditionFalse,
 		},
 		{
 			name:       "unschedulable pod",
@@ -49,10 +49,10 @@ func TestEvaluateLifecycle(t *testing.T) {
 			pods: []corev1.Pod{{Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{
 				Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: corev1.PodReasonUnschedulable, Message: "Insufficient nvidia.com/gpu",
 			}}}}},
-			reason:   "Unschedulable",
-			ready:    metav1.ConditionFalse,
+			reason:    "Unschedulable",
+			ready:     metav1.ConditionFalse,
 			available: metav1.ConditionTrue,
-			degraded: metav1.ConditionTrue,
+			degraded:  metav1.ConditionTrue,
 		},
 		{
 			name:       "image pull failure",
@@ -61,10 +61,10 @@ func TestEvaluateLifecycle(t *testing.T) {
 			pods: []corev1.Pod{{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
 				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: "image unavailable"}},
 			}}}}},
-			reason:   "ImagePullFailed",
-			ready:    metav1.ConditionFalse,
+			reason:    "ImagePullFailed",
+			ready:     metav1.ConditionFalse,
 			available: metav1.ConditionTrue,
-			degraded: metav1.ConditionTrue,
+			degraded:  metav1.ConditionTrue,
 		},
 		{
 			name:       "crash loop",
@@ -73,10 +73,10 @@ func TestEvaluateLifecycle(t *testing.T) {
 			pods: []corev1.Pod{{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
 				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff", Message: "container restart"}},
 			}}}}},
-			reason:   "CrashLoopBackOff",
-			ready:    metav1.ConditionFalse,
+			reason:    "CrashLoopBackOff",
+			ready:     metav1.ConditionFalse,
 			available: metav1.ConditionTrue,
-			degraded: metav1.ConditionTrue,
+			degraded:  metav1.ConditionTrue,
 		},
 	}
 
