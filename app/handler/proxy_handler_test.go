@@ -83,6 +83,10 @@ func (m *MockQuotaService) GetProjectQuota(projectID string) (int, error) {
 	return args.Int(0), args.Error(1)
 }
 
+func (m *MockQuotaService) SettleUsage(requestID, action string) error {
+	return m.Called(requestID, action).Error(0)
+}
+
 // Route mocks the Route method of Router.
 func (m *MockRouter) Route(requestBody []byte) string {
 	args := m.Called(requestBody)

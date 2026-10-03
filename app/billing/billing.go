@@ -88,4 +88,10 @@ type QuotaService interface {
 	// GetQuota retrieves current quota balance
 	GetOrgQuota(orgID string) (int, error)
 	GetProjectQuota(projectID string) (int, error)
+
+	// SettleUsage transitions a pending ledger entry to a terminal state.
+	// action "billed" deducts quota exactly once (idempotent); "cancelled"
+	// marks it cancelled without any deduction. Only "pending" entries can be
+	// settled; any other state is rejected. (Phase 6, T-F3)
+	SettleUsage(requestID, action string) error
 }

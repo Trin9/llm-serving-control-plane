@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -100,6 +101,45 @@ redis.call("HSET", ledger_key, "state", "refunded")
 return {1, "success", tokens}
 `
 
+// luaSettleUsage transitions a pending ledger entry to a terminal state
+// (Phase 6, T-F3). Only "pending" entries may settle:
+//   - "billed": deducts quota exactly once (idempotent via usage:req key) and
+//     marks the ledger billed.
+//   - "cancelled": marks the ledger cancelled without any deduction.
+// The org/project/tokens are read from the ledger itself so callers only need
+// the request ID and the desired action.
+const luaSettleUsage = `
+local ledger_key = KEYS[1]
+local action = ARGV[1]
+local request_id = ARGV[2]
+
+local state = redis.call("HGET", ledger_key, "state")
+if not state then
+	return {0, "ledger_not_found"}
+end
+if state ~= "pending" then
+	return {0, "invalid_state"}
+end
+
+local org_id = redis.call("HGET", ledger_key, "org_id")
+local project_id = redis.call("HGET", ledger_key, "project_id")
+local total_tokens = tonumber(redis.call("HGET", ledger_key, "total_tokens")) or 0
+
+if action == "billed" then
+	if total_tokens > 0 then
+		redis.call("DECRBY", "quota:org:" .. org_id, total_tokens)
+		redis.call("DECRBY", "quota:project:" .. project_id, total_tokens)
+	end
+	redis.call("SET", "usage:req:" .. request_id, "processed", "EX", 86400)
+	redis.call("HSET", ledger_key, "state", "billed")
+elseif action == "cancelled" then
+	redis.call("HSET", ledger_key, "state", "cancelled")
+else
+	return {0, "invalid_action"}
+end
+return {1, "success"}
+`
+
 var (
 	ErrAPIKeyNotFound        = errors.New("API key not found")
 	ErrAPIKeyInactive        = errors.New("API key is not active")
@@ -130,6 +170,13 @@ type RedisBillingService struct {
 	retryQueue  []*retryEntry
 	retryStopCh chan struct{}
 	retryWg     sync.WaitGroup
+
+	// Durable outbox (Phase 6, T-F2): a Redis LIST that survives pod restarts.
+	// Failed settlements are LPUSHed here and drained by outboxLoop; the
+	// in-memory retryQueue above remains the last resort when Redis itself is
+	// unreachable.
+	outboxStopCh chan struct{}
+	outboxWg     sync.WaitGroup
 }
 
 // retryEntry is a queued usage record awaiting settlement retry.
@@ -146,6 +193,26 @@ const (
 	retryInterval    = 30 * time.Second
 	retryMaxAttempts = 120
 )
+
+const (
+	// Durable outbox keys (Phase 6, T-F2).
+	outboxKey        = "usage:outbox"
+	outboxProcessing = "usage:outbox:processing"
+	outboxDead       = "usage:outbox:dead"
+
+	// outboxPopTimeout bounds a blocking BRPOPLPUSH wait between polls.
+	outboxPopTimeout = 5 * time.Second
+	// outboxProcessingTTLSeconds bounds how long an item can be stranded in the
+	// processing list (e.g. worker crashed mid-settle) before Redis expires it.
+	outboxProcessingTTLSeconds = 10 * 60
+)
+
+// outboxEntry is the durable outbox payload: the usage record plus its retry
+// attempt count (attempts survive pod restarts because the entry is JSON in Redis).
+type outboxEntry struct {
+	Record   UsageRecord `json:"record"`
+	Attempts int         `json:"attempts"`
+}
 
 // NewRedisBillingService creates a Redis-based billing service
 // redisAddr: Redis connection address (e.g., "localhost:6379")
@@ -206,6 +273,15 @@ func (s *RedisBillingService) Start() {
 	}
 	s.retryWg.Add(1)
 	go s.retryLoop()
+
+	// Durable outbox worker (Phase 6, T-F2). Requeue items stranded in the
+	// processing list by a previously crashed instance, then drain the outbox.
+	if s.outboxStopCh == nil {
+		s.outboxStopCh = make(chan struct{})
+	}
+	s.recoverStaleOutboxItems()
+	s.outboxWg.Add(1)
+	go s.outboxLoop()
 }
 
 // Stop gracefully closes the Redis connection
@@ -213,6 +289,10 @@ func (s *RedisBillingService) Stop() {
 	if s.retryStopCh != nil {
 		close(s.retryStopCh)
 		s.retryWg.Wait()
+	}
+	if s.outboxStopCh != nil {
+		close(s.outboxStopCh)
+		s.outboxWg.Wait()
 	}
 	s.cancel()
 	if err := s.client.Close(); err != nil {
@@ -314,7 +394,7 @@ func (s *RedisBillingService) ReportUsage(record UsageRecord) error {
 	// Deferred settlement: persist a pending ledger entry, no quota deduction.
 	if record.Deferred {
 		if err := s.recordDeferred(record); err != nil {
-			s.enqueueRetry(record)
+			s.enqueueForRetry(record, err)
 			if s.failOpen {
 				log.Printf("⚠️ [BILLING] Deferred ledger write failed, queued for retry (fail-open): %v", err)
 				return nil
@@ -331,7 +411,7 @@ func (s *RedisBillingService) ReportUsage(record UsageRecord) error {
 
 	// Transient Redis failure: queue for background retry so usage is not silently
 	// lost. The usage:req idempotency key makes retries safe (no double deduction).
-	s.enqueueRetry(record)
+	s.enqueueForRetry(record, err)
 	if s.failOpen {
 		log.Printf("⚠️ [BILLING] Redis error during deduction, queued for retry (fail-open): %v", err)
 		return nil
@@ -419,6 +499,109 @@ func (s *RedisBillingService) enqueueRetry(record UsageRecord) {
 	s.retryMu.Lock()
 	defer s.retryMu.Unlock()
 	s.retryQueue = append(s.retryQueue, &retryEntry{record: record, nextAt: time.Now().Add(retryInterval)})
+}
+
+// enqueueForRetry persists a failed settlement for background processing
+// (Phase 6, T-F2). The durable Redis outbox is preferred because it survives
+// pod restarts; the in-memory queue is the last resort when Redis itself is
+// unreachable.
+func (s *RedisBillingService) enqueueForRetry(record UsageRecord, cause error) {
+	if err := s.enqueueOutbox(record); err == nil {
+		log.Printf("🔄 [BILLING] Request=%s queued to Redis outbox (outbox-redis): %v", record.RequestID, cause)
+		return
+	}
+	s.enqueueRetry(record)
+	log.Printf("🔄 [BILLING] Request=%s queued to in-memory retry (outbox-memory; Redis outbox unreachable): %v", record.RequestID, cause)
+}
+
+// enqueueOutbox LPUSHes a JSON-encoded entry onto the durable outbox list.
+func (s *RedisBillingService) enqueueOutbox(record UsageRecord) error {
+	entry := outboxEntry{Record: record}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	return s.client.LPush(s.ctx, outboxKey, data).Err()
+}
+
+// recoverStaleOutboxItems moves items stranded in the processing list (left by
+// a worker that crashed mid-settle) back to the outbox for re-processing.
+func (s *RedisBillingService) recoverStaleOutboxItems() {
+	for {
+		if _, err := s.client.RPopLPush(s.ctx, outboxProcessing, outboxKey).Result(); err != nil {
+			return // redis.Nil (empty) or a real error; either way stop
+		}
+	}
+}
+
+// outboxLoop drains the durable outbox: it atomically moves the next entry to
+// the processing list, settles it, then removes it. Failed entries are
+// re-queued with an incremented attempt count; exhausted entries go to the
+// dead list. (Phase 6, T-F2)
+func (s *RedisBillingService) outboxLoop() {
+	defer s.outboxWg.Done()
+	for {
+		select {
+		case <-s.outboxStopCh:
+			return
+		default:
+		}
+
+		item, err := s.client.BRPopLPush(s.ctx, outboxKey, outboxProcessing, outboxPopTimeout).Result()
+		if err == redis.Nil {
+			continue // blocking pop timed out: no items
+		}
+		if err != nil {
+			log.Printf("⚠️ [BILLING] outbox pop failed: %v", err)
+			time.Sleep(time.Second)
+			continue
+		}
+		// Bound the processing list lifetime so a crashed worker cannot strand
+		// items forever (best-effort; crash recovery also runs on Start).
+		_ = s.client.Expire(s.ctx, outboxProcessing, outboxProcessingTTLSeconds*time.Second).Err()
+		s.settleOutboxItem(item)
+	}
+}
+
+// settleOutboxItem settles a single outbox entry and advances it through the
+// outbox -> processing -> (outbox|dead) lifecycle.
+func (s *RedisBillingService) settleOutboxItem(item string) {
+	var entry outboxEntry
+	if err := json.Unmarshal([]byte(item), &entry); err != nil {
+		log.Printf("🔥 [BILLING] outbox item unparseable, moving to dead list: %v", err)
+		s.client.RPush(s.ctx, outboxDead, item)
+		s.client.LRem(s.ctx, outboxProcessing, 1, item)
+		return
+	}
+
+	record := entry.Record
+	var err error
+	if record.Deferred {
+		err = s.recordDeferred(record)
+	} else {
+		err = s.executeOnce(record)
+	}
+
+	switch {
+	case err == nil || errors.Is(err, ErrAlreadyProcessed):
+		// Settled (or already settled — idempotency key hit): remove from processing.
+		s.client.LRem(s.ctx, outboxProcessing, 1, item)
+		log.Printf("✅ [BILLING] outbox settled: Request=%s", record.RequestID)
+	default:
+		entry.Attempts++
+		if entry.Attempts >= retryMaxAttempts {
+			s.client.LRem(s.ctx, outboxProcessing, 1, item)
+			dead, _ := json.Marshal(entry)
+			s.client.RPush(s.ctx, outboxDead, dead)
+			log.Printf("🔥 [BILLING] outbox exhausted for Request=%s after %d attempts: %v", record.RequestID, entry.Attempts, err)
+			return
+		}
+		// Re-queue at the tail so other entries get a chance, and drop the processing copy.
+		data, _ := json.Marshal(entry)
+		s.client.RPush(s.ctx, outboxKey, data)
+		s.client.LRem(s.ctx, outboxProcessing, 1, item)
+		log.Printf("⚠️ [BILLING] outbox retry queued: Request=%s attempt=%d err=%v", record.RequestID, entry.Attempts, err)
+	}
 }
 
 // retryLoop periodically re-attempts queued settlements.
@@ -521,6 +704,44 @@ func (s *RedisBillingService) RefundUsage(requestID string) error {
 		return fmt.Errorf("unexpected refund token count: %v", resultSlice[2])
 	}
 	log.Printf("🔁 [BILLING] Refunded request=%s tokens=%d", requestID, tokens)
+	return nil
+}
+
+// SettleUsage transitions a pending ledger entry to a terminal state
+// (Phase 6, T-F3). Only "pending" entries may settle: "billed" deducts quota
+// exactly once (idempotent via the usage:req key); "cancelled" marks the entry
+// cancelled without deduction. Billed/refunded/cancelled entries are rejected.
+func (s *RedisBillingService) SettleUsage(requestID, action string) error {
+	if action != "billed" && action != "cancelled" {
+		return fmt.Errorf("invalid settle action %q (want billed|cancelled)", action)
+	}
+
+	key := fmt.Sprintf("usage:ledger:%s", requestID)
+	result, err := s.client.Eval(s.ctx, luaSettleUsage, []string{key}, action, requestID).Result()
+	if err != nil {
+		return fmt.Errorf("settle lua script failed: %w", err)
+	}
+
+	resultSlice, ok := result.([]interface{})
+	if !ok || len(resultSlice) < 2 {
+		return fmt.Errorf("unexpected settle lua script result: %v", result)
+	}
+	code, _ := resultSlice[0].(int64)
+	message, _ := resultSlice[1].(string)
+	if code != 1 {
+		switch message {
+		case "ledger_not_found":
+			return fmt.Errorf("ledger entry not found for request %s", requestID)
+		case "invalid_state":
+			return fmt.Errorf("request %s is not in pending state", requestID)
+		case "invalid_action":
+			return fmt.Errorf("invalid settle action %q", action)
+		default:
+			return fmt.Errorf("settle rejected: %s", message)
+		}
+	}
+
+	log.Printf("📝 [BILLING] Settled request=%s action=%s", requestID, action)
 	return nil
 }
 

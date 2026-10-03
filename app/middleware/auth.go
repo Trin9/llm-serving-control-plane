@@ -83,3 +83,24 @@ func AuthMiddleware(billingSvc billing.BillingService) gin.HandlerFunc {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token/API key"})
 	}
 }
+
+// AdminOnlyMiddleware gates a route group to authenticated identities whose
+// userID is in the comma-separated allowlist (ADMIN_USER_IDS). An empty
+// allowlist denies everything (safe default). It is mounted AFTER
+// AuthMiddleware so c.GetString("userID") is populated. (Phase 6, T-F3)
+func AdminOnlyMiddleware(allowlist string) gin.HandlerFunc {
+	allowed := map[string]bool{}
+	for _, id := range strings.Split(allowlist, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			allowed[id] = true
+		}
+	}
+	return func(c *gin.Context) {
+		userID := c.GetString("userID")
+		if userID == "" || !allowed[userID] {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "admin privileges required"})
+			return
+		}
+		c.Next()
+	}
+}

@@ -134,6 +134,13 @@ func main() {
 
 	r.GET("/health", handler.HealthCheckHandler)
 
+	// Admin route group (Phase 6, T-F3): billing settlement operations.
+	// Requires a JWT whose userID is in the ADMIN_USER_IDS allowlist.
+	admin := r.Group("/admin")
+	admin.Use(middleware.AuthMiddleware(billingSvc))
+	admin.Use(middleware.AdminOnlyMiddleware(os.Getenv("ADMIN_USER_IDS")))
+	admin.POST("/billing/settle", handler.SettleUsageHandlerFactory(billingSvc))
+
 	// API route group
 	api := r.Group("/v1")
 	api.Use(middleware.AuthMiddleware(billingSvc)) // mount auth middleware (supports JWT & API Key)
