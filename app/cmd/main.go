@@ -28,6 +28,30 @@ func boolFromEnv(name string, fallback bool) bool {
 	return parsed
 }
 
+func intFromEnv(name string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func floatFromEnv(name string, fallback float64) float64 {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
 func main() {
 	// 0. Initialize Billing Service (W12)
 	// Supports Redis for production and memory for local development
@@ -46,6 +70,22 @@ func main() {
 
 	billingSvc.Start()
 	defer billingSvc.Stop() // ensure graceful shutdown on exit
+
+	// Phase 6 (T-F1): distributed rate limiting. When Redis billing is active,
+	// a shared fixed-window limiter is used so N replicas enforce the aggregate
+	// RPS instead of N× the per-replica limit; on Redis errors it falls back to
+	// the process-local token bucket.
+	rateLimitRPS := floatFromEnv("RATE_LIMIT_RPS", 1000)
+	rateLimitBurst := intFromEnv("RATE_LIMIT_BURST", 2000)
+	localLimiter := middleware.NewLocalRateLimiter(rateLimitRPS, rateLimitBurst)
+	var rateLimiter middleware.RateLimiter = localLimiter
+	if redisBilling, ok := billingSvc.(*billing.RedisBillingService); ok {
+		if client := redisBilling.RedisClient(); client != nil {
+			redisLimiter := middleware.NewRedisRateLimiter(client, int64(rateLimitRPS), time.Second)
+			rateLimiter = middleware.NewFailoverRateLimiter(redisLimiter, localLimiter)
+			log.Printf("rate limiter: Redis distributed (limit=%d rps, local fallback enabled)", int64(rateLimitRPS))
+		}
+	}
 
 	// 1. Initialize semantic routing (W13)
 	// In production, prefer Kubernetes Endpoints for automatic backend discovery;
@@ -97,7 +137,7 @@ func main() {
 	// API route group
 	api := r.Group("/v1")
 	api.Use(middleware.AuthMiddleware(billingSvc)) // mount auth middleware (supports JWT & API Key)
-	api.Use(middleware.RateLimitMiddleware())      // mount rate limiting
+	api.Use(middleware.RateLimitMiddleware(rateLimiter)) // mount rate limiting (distributed + local fallback)
 	api.Use(middleware.PrometheusMiddleware())     // mount monitoring
 
 	// --- 3. Expose the /metrics endpoint ---

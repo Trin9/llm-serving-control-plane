@@ -171,6 +171,13 @@ func NewRedisBillingService(redisAddr, redisPassword string, failOpen bool) *Red
 	}
 }
 
+// RedisClient exposes the shared Redis client so other subsystems (e.g. the
+// distributed rate limiter) can reuse the same connection pool without opening
+// a second one.
+func (s *RedisBillingService) RedisClient() *redis.Client {
+	return s.client
+}
+
 func apiKeyFingerprint(apiKey string) string {
 	digest := sha256.Sum256([]byte(apiKey))
 	return fmt.Sprintf("%x", digest[:])
