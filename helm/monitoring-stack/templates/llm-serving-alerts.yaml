@@ -11,6 +11,18 @@ spec:
   groups:
     - name: llm-serving.rules
       rules:
+        # T-F6 (L2 deadman's switch): this alert fires continuously while
+        # Prometheus + Alertmanager are healthy and routes to Feishu with a 1h
+        # repeat. Receiving the heartbeat = alert chain healthy; silence (or a
+        # resolved notification) = Alertmanager/Prometheus lost. Do NOT silence
+        # this alert or route it to "null".
+        - alert: LLMWatchdog
+          expr: vector(1)
+          for: 0m
+          labels:
+            severity: watchdog
+          annotations:
+            summary: "LLM serving watchdog heartbeat (deadman's switch)"
         - alert: LLMQueueBacklog
           expr: sum(vllm:num_requests_waiting{service="qwen-service"}) > 10
           for: 2m

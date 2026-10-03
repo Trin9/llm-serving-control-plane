@@ -7,7 +7,12 @@ kube-prometheus-stack:
       replicas: 1
       nodeSelector:
         kubernetes.azure.com/agentpool: nodepool1
-    # Route everything (except the always-firing Watchdog) to the Feishu bridge.
+    # Route everything to the Feishu bridge, EXCEPT:
+    #   - the kube-prometheus-stack built-in "Watchdog" (permanently firing
+    #     upstream noise) -> "null" receiver.
+    #   - our "LLMWatchdog" (T-F6 deadman's switch) -> feishu with a 1h repeat
+    #     so it heartbeats hourly: receiving it = alert chain healthy; silence
+    #     = Alertmanager/Prometheus lost (L2).
     config:
       route:
         group_by: ["alertname", "namespace"]
@@ -19,6 +24,10 @@ kube-prometheus-stack:
           - matchers:
               - "alertname = Watchdog"
             receiver: "null"
+          - matchers:
+              - "alertname = LLMWatchdog"
+            receiver: feishu
+            repeat_interval: 1h
       receivers:
         - name: feishu
           webhook_configs:
