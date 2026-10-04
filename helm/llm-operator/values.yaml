@@ -96,6 +96,12 @@ gate-service:
     REDIS_ADDR: "llm-operator-redis.default.svc.cluster.local:6379"
     # Phase 6 (T-A2): prefix-hash (default) | random (KV-cache routing A/B baseline).
     ROUTER_STRATEGY: "prefix-hash"
+    # Phase 6 (T-F1): distributed rate limit (shared across replicas via Redis).
+    # Leave empty to use the gateway defaults (RPS=1000, burst=2000).
+    RATE_LIMIT_RPS: ""
+    RATE_LIMIT_BURST: ""
+    # Phase 6 (T-F3): comma-separated JWT userIDs allowed to call /admin/billing/settle.
+    ADMIN_USER_IDS: ""
 
 redis:
   enabled: true

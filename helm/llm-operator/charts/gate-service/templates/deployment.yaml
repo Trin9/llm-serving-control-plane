@@ -50,6 +50,20 @@ spec:
             - name: ROUTER_STRATEGY
               value: {{ . | quote }}
             {{- end }}
+            {{- with .Values.env.RATE_LIMIT_RPS }}
+            # Phase 6 (T-F1): distributed rate limit (shared across replicas).
+            - name: RATE_LIMIT_RPS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.env.RATE_LIMIT_BURST }}
+            - name: RATE_LIMIT_BURST
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.env.ADMIN_USER_IDS }}
+            # Phase 6 (T-F3): JWT userIDs allowed to call /admin/billing/settle.
+            - name: ADMIN_USER_IDS
+              value: {{ . | quote }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /health

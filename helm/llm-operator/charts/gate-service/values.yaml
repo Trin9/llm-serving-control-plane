@@ -30,6 +30,12 @@ env:
   # Phase 6 (T-A2): request routing strategy - prefix-hash (default) keeps
   # same-prefix requests on one backend; random spreads uniformly (A/B baseline).
   ROUTER_STRATEGY: "prefix-hash"
+  # Phase 6 (T-F1): distributed rate limit (shared across replicas via Redis).
+  # Leave empty to use the gateway defaults (RPS=1000, burst=2000).
+  RATE_LIMIT_RPS: ""
+  RATE_LIMIT_BURST: ""
+  # Phase 6 (T-F3): comma-separated JWT userIDs allowed to call /admin/billing/settle.
+  ADMIN_USER_IDS: ""
 
 # Node selector (closeout-final: pin control-plane components away from the GPU pool).
 nodeSelector: {}
