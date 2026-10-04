@@ -42,6 +42,32 @@ var (
 		},
 		[]string{"model", "route"}, // labels: model name, route
 	)
+
+	// Router load-aware metrics (Phase 6, W7 prefix-load). Low-cardinality only:
+	// no prompt/token/API-key content ever becomes a label.
+	RouterActiveRequests = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gateway_router_active_requests",
+			Help: "In-flight requests currently routed to each backend, by model.",
+		},
+		[]string{"model", "backend"},
+	)
+
+	RouterSpillTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gateway_router_spill_total",
+			Help: "Number of routing decisions that spilled off the affinity owner due to load.",
+		},
+		[]string{"model"},
+	)
+
+	RouterSelectionTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gateway_router_selection_total",
+			Help: "Number of backend selections by model and strategy.",
+		},
+		[]string{"model", "strategy"},
+	)
 )
 
 func init() {
@@ -50,4 +76,7 @@ func init() {
 	prometheus.MustRegister(RequestDuration)
 	prometheus.MustRegister(AITimeToFirstToken)
 	prometheus.MustRegister(AITimePerOutputToken)
+	prometheus.MustRegister(RouterActiveRequests)
+	prometheus.MustRegister(RouterSpillTotal)
+	prometheus.MustRegister(RouterSelectionTotal)
 }

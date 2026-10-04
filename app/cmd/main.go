@@ -126,6 +126,12 @@ func main() {
 	routerSvc.SetStrategy(routerStrategy)
 	log.Printf("gateway routing strategy: %s", routerStrategy)
 
+	// Phase 6 (W7/P1): spill threshold for the prefix-load strategy. Only
+	// meaningful when ROUTER_STRATEGY=prefix-load; <=0 disables spilling.
+	spillThreshold := int64(intFromEnv("ROUTER_SPILL_THRESHOLD", 64))
+	routerSvc.SetInflightThreshold(spillThreshold)
+	log.Printf("gateway spill threshold: %d", spillThreshold)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	handler.StartBackendRefresh(ctx, backendSource, routerSvc, 30*time.Second)
@@ -143,9 +149,9 @@ func main() {
 
 	// API route group
 	api := r.Group("/v1")
-	api.Use(middleware.AuthMiddleware(billingSvc)) // mount auth middleware (supports JWT & API Key)
+	api.Use(middleware.AuthMiddleware(billingSvc))       // mount auth middleware (supports JWT & API Key)
 	api.Use(middleware.RateLimitMiddleware(rateLimiter)) // mount rate limiting (distributed + local fallback)
-	api.Use(middleware.PrometheusMiddleware())     // mount monitoring
+	api.Use(middleware.PrometheusMiddleware())           // mount monitoring
 
 	// --- 3. Expose the /metrics endpoint ---
 	// Prometheus scrapes metrics from this endpoint

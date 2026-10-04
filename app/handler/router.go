@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"gate-service/app/monitor"
 )
 
 // Routing strategies (Phase 6, T-A2). The strategy decides how a request body is
@@ -22,6 +24,11 @@ import (
 const (
 	StrategyPrefixHash = "prefix-hash"
 	StrategyRandom     = "random"
+
+	// StrategyPrefixLoad (Phase 6, W7/P1) keeps prefix-cache affinity but spills
+	// a request off its affinity owner when that owner's in-flight count exceeds
+	// the spill threshold, sending it to the least-loaded healthy backend.
+	StrategyPrefixLoad = "prefix-load"
 )
 
 // NormalizeStrategy maps a raw configuration value onto a supported strategy.
@@ -33,6 +40,8 @@ func NormalizeStrategy(value string) (string, bool) {
 		return StrategyPrefixHash, true
 	case StrategyRandom:
 		return StrategyRandom, true
+	case StrategyPrefixLoad:
+		return StrategyPrefixLoad, true
 	default:
 		return StrategyPrefixHash, false
 	}
@@ -52,6 +61,18 @@ type ModelRouteValidator interface {
 	ValidateModelRoute(reqBody []byte) error
 }
 
+// LoadAwareRouter is implemented by routers that track per-backend in-flight
+// requests and hand back a release callback so the caller can return the lease
+// when the request completes (Phase 6, W7/P1 prefix-load). Routers that do not
+// implement this interface keep the plain Route contract.
+type LoadAwareRouter interface {
+	Router
+	// RouteWithLease selects a backend and acquires an in-flight lease. The
+	// returned release function must be called exactly once when the request
+	// finishes (success, error, or client disconnect).
+	RouteWithLease(reqBody []byte) (string, func())
+}
+
 // ConsistentHashRouter implements a consistent hash routing strategy (W13).
 type ConsistentHashRouter struct {
 	mu       sync.RWMutex
@@ -66,6 +87,13 @@ type ConsistentHashRouter struct {
 	// not safe for concurrent use.
 	rand   *rand.Rand
 	randMu sync.Mutex
+
+	// in-flight accounting (Phase 6, W7/P1 prefix-load): backend URL -> active
+	// request count. Guarded by mu (write lock for acquire/release).
+	inflight map[string]int64
+	// inflightThreshold is the per-backend load above which prefix-load spills
+	// off the affinity owner. Values <= 0 disable spilling (pure affinity).
+	inflightThreshold int64
 }
 
 // ModelConsistentHashRouter buckets requests by model and maintains an independent hash ring per model.
@@ -83,11 +111,13 @@ type ModelConsistentHashRouter struct {
 
 func NewConsistentHashRouter(urls []string) *ConsistentHashRouter {
 	r := &ConsistentHashRouter{
-		backends: urls,
-		replicas: 50, // map each real node to 50 virtual nodes
-		nodes:    make(map[uint32]string),
-		strategy: StrategyPrefixHash,
-		rand:     rand.New(rand.NewSource(time.Now().UnixNano())),
+		backends:          urls,
+		replicas:          50, // map each real node to 50 virtual nodes
+		nodes:             make(map[uint32]string),
+		strategy:          StrategyPrefixHash,
+		rand:              rand.New(rand.NewSource(time.Now().UnixNano())),
+		inflight:          make(map[string]int64),
+		inflightThreshold: 64,
 	}
 	r.UpdateBackends(urls)
 	return r
@@ -109,6 +139,14 @@ func (r *ConsistentHashRouter) SetStrategy(strategy string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.strategy = normalized
+}
+
+// SetInflightThreshold sets the per-backend load above which prefix-load spills
+// off the affinity owner (Phase 6, W7/P1). Values <= 0 disable spilling.
+func (r *ConsistentHashRouter) SetInflightThreshold(n int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.inflightThreshold = n
 }
 
 // Strategy returns the active strategy (used by tests and diagnostics).
@@ -148,6 +186,21 @@ func (r *ModelConsistentHashRouter) Strategy() string {
 		return StrategyPrefixHash
 	}
 	return r.strategy
+}
+
+// SetInflightThreshold propagates the spill threshold to the default pool and
+// every per-model pool (Phase 6, W7/P1).
+func (r *ModelConsistentHashRouter) SetInflightThreshold(n int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.defaultRouter != nil {
+		r.defaultRouter.SetInflightThreshold(n)
+	}
+	for _, pool := range r.modelRouters {
+		if pool != nil {
+			pool.SetInflightThreshold(n)
+		}
+	}
 }
 
 func (r *ModelConsistentHashRouter) RegisterModelBackends(model string, urls []string) {
@@ -248,6 +301,30 @@ func (r *ModelConsistentHashRouter) Route(reqBody []byte) string {
 	return r.defaultRouter.Route(reqBody)
 }
 
+// RouteWithLease implements LoadAwareRouter for the model-bucketed router: it
+// delegates lease acquisition to the per-model pool (or the default pool).
+func (r *ModelConsistentHashRouter) RouteWithLease(reqBody []byte) (string, func()) {
+	model := extractModelName(reqBody)
+
+	r.mu.RLock()
+	if model != "" {
+		if pool, ok := r.modelRouters[model]; ok && pool != nil {
+			r.mu.RUnlock()
+			return pool.RouteWithLease(reqBody)
+		}
+	}
+	if r.modelRoutingEnabled {
+		r.mu.RUnlock()
+		return "", nil
+	}
+	def := r.defaultRouter
+	r.mu.RUnlock()
+	if def == nil {
+		return "", nil
+	}
+	return def.RouteWithLease(reqBody)
+}
+
 // ValidateModelRoute enforces model isolation after dynamic model discovery is active.
 // A default-only static configuration remains backward compatible.
 func (r *ModelConsistentHashRouter) ValidateModelRoute(reqBody []byte) error {
@@ -311,21 +388,26 @@ func (r *ConsistentHashRouter) UpdateBackends(urls []string) {
 func (r *ConsistentHashRouter) Route(reqBody []byte) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return r.routeLocked(reqBody)
+}
 
+// routeLocked selects a backend without lease accounting. Caller must hold r.mu
+// (read lock is sufficient; prefix-load falls back to pure affinity here because
+// the plain Route contract predates load awareness).
+func (r *ConsistentHashRouter) routeLocked(reqBody []byte) string {
 	if len(r.backends) == 0 {
 		return ""
 	}
-
-	// Phase 6 (T-A2): the random strategy is the A/B baseline that ignores
-	// request content entirely and spreads load uniformly across backends.
 	if r.strategy == StrategyRandom {
 		return r.routeRandom()
 	}
+	return r.routePrefixHashLocked(reqBody)
+}
 
-	// 1. Extract the semantic feature (prefix)
+// routePrefixHashLocked returns the affinity owner for the request's prompt
+// prefix via consistent hashing. Caller must hold r.mu.
+func (r *ConsistentHashRouter) routePrefixHashLocked(reqBody []byte) string {
 	feature := r.extractFeature(reqBody)
-
-	// 2. Look up via consistent hashing
 	hash := r.hash(feature)
 	idx := sort.Search(len(r.keys), func(i int) bool {
 		return r.keys[i] >= hash
@@ -336,6 +418,85 @@ func (r *ConsistentHashRouter) Route(reqBody []byte) string {
 	}
 
 	return r.nodes[r.keys[idx]]
+}
+
+// routePrefixLoadLocked returns the affinity owner unless it is over the
+// in-flight threshold, in which case it spills to the least-loaded backend.
+// The second return reports whether a spill happened. Caller must hold r.mu
+// (write lock) because it reads the in-flight map.
+func (r *ConsistentHashRouter) routePrefixLoadLocked(reqBody []byte) (string, bool) {
+	owner := r.routePrefixHashLocked(reqBody)
+	if r.inflightThreshold <= 0 || r.inflight[owner] < r.inflightThreshold {
+		return owner, false
+	}
+
+	best := ""
+	var bestN int64 = 1<<62 - 1
+	for _, b := range r.backends {
+		if r.inflight[b] < bestN {
+			bestN = r.inflight[b]
+			best = b
+		}
+	}
+	if best == "" {
+		return owner, false
+	}
+	return best, best != owner
+}
+
+// RouteWithLease implements LoadAwareRouter: it selects a backend and acquires
+// an in-flight lease. The returned release function is idempotent and must be
+// called exactly once when the request completes.
+func (r *ConsistentHashRouter) RouteWithLease(reqBody []byte) (string, func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if len(r.backends) == 0 {
+		return "", nil
+	}
+
+	var target string
+	spilled := false
+	switch r.strategy {
+	case StrategyRandom:
+		target = r.routeRandom()
+	case StrategyPrefixLoad:
+		target, spilled = r.routePrefixLoadLocked(reqBody)
+	default:
+		target = r.routePrefixHashLocked(reqBody)
+	}
+	if target == "" {
+		return "", nil
+	}
+
+	model := extractModelName(reqBody)
+	if model == "" {
+		model = "unknown"
+	}
+
+	if r.inflight == nil {
+		r.inflight = make(map[string]int64)
+	}
+	r.inflight[target]++
+	monitor.RouterActiveRequests.WithLabelValues(model, target).Inc()
+	monitor.RouterSelectionTotal.WithLabelValues(model, r.strategy).Inc()
+	if spilled {
+		monitor.RouterSpillTotal.WithLabelValues(model).Inc()
+	}
+
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			r.mu.Lock()
+			r.inflight[target]--
+			if r.inflight[target] <= 0 {
+				delete(r.inflight, target)
+			}
+			r.mu.Unlock()
+			monitor.RouterActiveRequests.WithLabelValues(model, target).Dec()
+		})
+	}
+	return target, release
 }
 
 // routeRandom picks a backend uniformly at random. Callers must hold r.mu

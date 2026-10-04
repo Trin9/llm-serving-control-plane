@@ -235,11 +235,22 @@ func ProxyHandlerFactory(billingSvc billing.BillingService, router Router) gin.H
 			}
 		}
 
-		// 1. Route selection based on request content
-		targetURL := router.Route(bodyBytes)
+		// 1. Route selection based on request content.
+		// Load-aware routers hand back a release callback so the in-flight lease
+		// is returned on every exit path (success, error, client disconnect).
+		var targetURL string
+		var releaseLease func()
+		if lr, ok := router.(LoadAwareRouter); ok {
+			targetURL, releaseLease = lr.RouteWithLease(bodyBytes)
+		} else {
+			targetURL = router.Route(bodyBytes)
+		}
 		if targetURL == "" {
 			c.JSON(503, gin.H{"error": "No available inference backends"})
 			return
+		}
+		if releaseLease != nil {
+			defer releaseLease()
 		}
 
 		// Parse request body to extract model name
