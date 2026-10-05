@@ -23,6 +23,9 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # Phase 6 (T-F4): give the gateway time to drain in-flight SSE streams on
+      # SIGTERM. Must be >= SHUTDOWN_GRACE_PERIOD (default 25s) + preStop sleep.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 30 }}
       containers:
         - name: gate-service
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -31,6 +34,16 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+          # Phase 6 (T-F4): brief pause before the SIGTERM handler runs so
+          # kube-proxy has time to remove this pod from Endpoints. New streams
+          # then land on other replicas while this pod drains its in-flight ones.
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - sleep {{ .Values.preStopSleepSeconds | default 5 }}
           {{- with .Values.env.existingSecret }}
           envFrom:
             - secretRef:
@@ -45,6 +58,8 @@ spec:
               value: {{ .Values.env.VLLM_URLS | quote }}
             - name: REDIS_ADDR
               value: {{ .Values.env.REDIS_ADDR | quote }}
+            - name: SHUTDOWN_GRACE_PERIOD
+              value: {{ .Values.env.SHUTDOWN_GRACE_PERIOD | default "25" | quote }}
             {{- with .Values.env.ROUTER_STRATEGY }}
             # Phase 6 (T-A2): prefix-hash (default) or random (A/B baseline).
             - name: ROUTER_STRATEGY

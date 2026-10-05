@@ -6,9 +6,12 @@ import (
 	"gate-service/app/handler"
 	"gate-service/app/middleware"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -160,5 +163,43 @@ func main() {
 	// Use the factory method to inject the billing service and routing strategy (W13)
 	api.POST("/chat/completions", handler.ProxyHandlerFactory(billingSvc, routerSvc))
 
-	r.Run(":8080")
+	// Phase 6 (T-F4): SSE graceful drain. Run the server behind http.Server so
+	// SIGTERM/SIGINT trigger Shutdown, which stops accepting new connections and
+	// lets in-flight SSE streams finish (bounded by SHUTDOWN_GRACE_PERIOD).
+	// Kubernetes must give the pod terminationGracePeriodSeconds >= this grace
+	// period so the container is not SIGKILLed mid-drain.
+	srv := &http.Server{
+		Addr:    ":8080",
+		Handler: r,
+	}
+
+	serverErr := make(chan error, 1)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			serverErr <- err
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case err := <-serverErr:
+		log.Fatalf("gateway server failed: %v", err)
+	case sig := <-quit:
+		log.Printf("received %s: draining in-flight SSE requests before shutdown", sig)
+	}
+
+	gracePeriod := time.Duration(intFromEnv("SHUTDOWN_GRACE_PERIOD", 25)) * time.Second
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), gracePeriod)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		// DeadlineExceeded means some streams outlived the grace period; the
+		// server force-closed them. Kubernetes will SIGKILL the container shortly
+		// after anyway (terminationGracePeriodSeconds).
+		log.Printf("graceful shutdown completed with remaining connections closed: %v", err)
+	} else {
+		log.Printf("graceful shutdown complete: all in-flight requests drained")
+	}
 }

@@ -68,6 +68,17 @@ var (
 		},
 		[]string{"model", "strategy"},
 	)
+
+	// Gateway in-flight requests (Phase 6, T-F4 SSE graceful drain). Lets the
+	// rollout drill observe how many streams are still being drained during
+	// shutdown. Low cardinality: method only.
+	GatewayInFlightRequests = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gateway_in_flight_requests",
+			Help: "Number of HTTP requests currently in flight in the gateway.",
+		},
+		[]string{"method"},
+	)
 )
 
 func init() {
@@ -79,4 +90,5 @@ func init() {
 	prometheus.MustRegister(RouterActiveRequests)
 	prometheus.MustRegister(RouterSpillTotal)
 	prometheus.MustRegister(RouterSelectionTotal)
+	prometheus.MustRegister(GatewayInFlightRequests)
 }

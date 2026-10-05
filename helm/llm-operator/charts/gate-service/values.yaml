@@ -3,6 +3,12 @@
 enabled: true
 replicaCount: 1
 
+# Phase 6 (T-F4): SSE graceful drain. The pod is given this many seconds to
+# drain in-flight streams after SIGTERM. Must be >= SHUTDOWN_GRACE_PERIOD +
+# preStopSleepSeconds so the container is not SIGKILLed mid-drain.
+terminationGracePeriodSeconds: 30
+preStopSleepSeconds: 5
+
 image:
   repository: gate-service
   tag: latest
@@ -36,6 +42,9 @@ env:
   RATE_LIMIT_BURST: ""
   # Phase 6 (T-F3): comma-separated JWT userIDs allowed to call /admin/billing/settle.
   ADMIN_USER_IDS: ""
+  # Phase 6 (T-F4): max seconds the gateway spends draining in-flight SSE
+  # streams after SIGTERM before force-closing them.
+  SHUTDOWN_GRACE_PERIOD: "25"
 
 # Node selector (closeout-final: pin control-plane components away from the GPU pool).
 nodeSelector: {}
