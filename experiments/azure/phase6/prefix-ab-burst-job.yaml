@@ -1,0 +1,66 @@
+# Phase 6 W7/P1 load-aware routing A/B — burst variant.
+# Identical to prefix-ab-job.yaml except it additionally passes --stagger so the
+# hot-prefix trial can fire all workers simultaneously (stagger=0), which is what
+# builds the affinity owner's in-flight queue above the spill threshold.
+# Placeholders (substituted by scripts/phase6-p1-burst-driver.sh):
+#   __NAME__ __SEED__ __PREFIX_CHARS__ __PREFIXES__ __TOTAL__ __CONC__ __MAX_TOKENS__ __STAGGER__
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __NAME__
+  namespace: default
+  labels:
+    app: phase6-prefix-ab
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: phase6-prefix-ab
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: loadgen
+          image: llmphase5eaacr.azurecr.io/python:3.12-slim
+          command: ["python3", "/src/prefix-ab-loadgen.py"]
+          args:
+            - --url
+            - http://llm-operator-gate-service.default.svc.cluster.local:8080/v1/chat/completions
+            - --model
+            - Qwen/Qwen2.5-0.5B-Instruct
+            - --seed
+            - "__SEED__"
+            - --prefix-chars
+            - "__PREFIX_CHARS__"
+            - --prefixes
+            - "__PREFIXES__"
+            - --total
+            - "__TOTAL__"
+            - --concurrency
+            - "__CONC__"
+            - --max-tokens
+            - "__MAX_TOKENS__"
+            - --stagger
+            - "__STAGGER__"
+          env:
+            - name: TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: loadgen-token
+                  key: TOKEN
+          volumeMounts:
+            - name: src
+              mountPath: /src
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      volumes:
+        - name: src
+          configMap:
+            name: phase6-prefix-ab-src
