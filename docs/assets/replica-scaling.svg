@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="380" viewBox="0 0 880 380" role="img" aria-labelledby="title desc">
+  <title id="title">Replica scaling at fixed concurrency</title>
+  <desc id="desc">Throughput was 66.81, 114.14, 146.10, and 167.11 requests per second for one through four replicas.</desc>
+  <rect width="880" height="380" rx="12" fill="#f8fafc"/>
+  <g font-family="Arial, sans-serif">
+    <text x="36" y="43" fill="#0f172a" font-size="22" font-weight="700">Replica scaling at fixed concurrency</text>
+    <text x="36" y="69" fill="#475569" font-size="14">Qwen2.5-0.5B · 1 T4 per replica · 192 concurrent requests</text>
+    <g stroke="#e2e8f0" stroke-width="1">
+      <line x1="115" y1="300" x2="780" y2="300"/>
+      <line x1="115" y1="239" x2="780" y2="239"/>
+      <line x1="115" y1="178" x2="780" y2="178"/>
+      <line x1="115" y1="117" x2="780" y2="117"/>
+    </g>
+    <g fill="#64748b" font-size="12">
+      <text x="88" y="304">0</text><text x="81" y="243">50</text>
+      <text x="74" y="182">100</text><text x="74" y="121">150</text>
+      <text x="36" y="97">requests/s</text>
+      <text x="155" y="326">1</text><text x="335" y="326">2</text>
+      <text x="515" y="326">3</text><text x="695" y="326">4</text>
+      <text x="382" y="348">vLLM replicas</text>
+    </g>
+    <polyline points="160,218.3 340,160.5 520,121.4 700,95.8" fill="none" stroke="#0284c7" stroke-width="4" stroke-linejoin="round"/>
+    <g fill="#0284c7" stroke="#f8fafc" stroke-width="3">
+      <circle cx="160" cy="218.3" r="7"/><circle cx="340" cy="160.5" r="7"/>
+      <circle cx="520" cy="121.4" r="7"/><circle cx="700" cy="95.8" r="7"/>
+    </g>
+    <g fill="#0f172a" font-size="14" font-weight="700">
+      <text x="137" y="203">66.81</text><text x="314" y="145">114.14</text>
+      <text x="494" y="106">146.10</text><text x="674" y="81">167.11</text>
+    </g>
+    <text x="36" y="370" fill="#64748b" font-size="12">One run per point; fixed client concurrency; not a maximum-throughput benchmark.</text>
+  </g>
+</svg>

@@ -1,0 +1,46 @@
+@startuml
+title Routing requests with the same extracted prefix
+left to right direction
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam roundcorner 14
+skinparam defaultFontName SansSerif
+skinparam defaultFontSize 14
+skinparam ArrowColor #64748B
+skinparam ArrowFontColor #475569
+skinparam componentStyle rectangle
+skinparam component {
+  BackgroundColor #EFF6FF
+  BorderColor #60A5FA
+  FontColor #0F172A
+}
+skinparam package {
+  BackgroundColor #F8FAFC
+  BorderColor #CBD5E1
+  FontColor #334155
+}
+
+package "prefix-hash: cache affinity" as hash {
+  component "Same-prefix\nrequests" as hreq #F1F5F9
+  component "Gateway\nprefix hash" as hgw #DBEAFE
+  component "Pod A\nprefix cache" as ha #DCFCE7
+  component "Pod B" as hb #F1F5F9
+  hreq --> hgw
+  hgw --> ha : route to owner
+  ha -[hidden]down-> hb
+}
+package "prefix-load: affinity + spill" as load {
+  component "Same-prefix\nrequests" as lreq #F1F5F9
+  component "Gateway\nprefix hash + load" as lgw #DBEAFE
+  component "Pod A\nowner is busy" as la #FEF3C7
+  component "Pod B\nless busy" as lb #DCFCE7
+  lreq --> lgw
+  lgw --> la : prefer owner
+  lgw --> lb : spill if less busy
+}
+hash -[hidden]down-> load
+
+legend bottom
+  Load is measured inside each Gateway process; cache stays local to each Pod.
+endlegend
+@enduml

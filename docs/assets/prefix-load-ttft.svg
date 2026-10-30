@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="320" viewBox="0 0 880 320" role="img" aria-labelledby="title desc">
+  <title id="title">Hot-prefix routing: client TTFT p95</title>
+  <desc id="desc">The median of three trial-level p95 measurements was 915 milliseconds for prefix-hash and 663 milliseconds for prefix-load.</desc>
+  <rect width="880" height="320" rx="12" fill="#f8fafc"/>
+  <g font-family="Arial, sans-serif">
+    <text x="36" y="46" fill="#0f172a" font-size="22" font-weight="700">Hot-prefix routing: client TTFT p95</text>
+    <text x="36" y="72" fill="#475569" font-size="14">Qwen2.5-0.5B · 2× T4 · 1 gateway · 96 concurrent requests</text>
+    <text x="36" y="138" fill="#334155" font-size="16">prefix-hash</text>
+    <text x="36" y="206" fill="#334155" font-size="16">prefix-load</text>
+    <rect x="180" y="112" width="549" height="38" rx="5" fill="#94a3b8"/>
+    <rect x="180" y="180" width="398" height="38" rx="5" fill="#0284c7"/>
+    <text x="743" y="138" fill="#0f172a" font-size="17" font-weight="700">915 ms</text>
+    <text x="592" y="206" fill="#0369a1" font-size="17" font-weight="700">663 ms</text>
+    <line x1="180" y1="246" x2="780" y2="246" stroke="#cbd5e1"/>
+    <text x="180" y="267" fill="#64748b" font-size="12">0</text>
+    <text x="467" y="267" fill="#64748b" font-size="12">500 ms</text>
+    <text x="743" y="267" fill="#64748b" font-size="12">1,000 ms</text>
+    <text x="36" y="299" fill="#64748b" font-size="12">Median of 3 trial p95s; first SSE data event; short sequential trials.</text>
+  </g>
+</svg>

@@ -1,0 +1,65 @@
+@startuml
+title LLM Serving Control Plane
+left to right direction
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam roundcorner 14
+skinparam defaultFontName SansSerif
+skinparam defaultFontSize 14
+skinparam ArrowColor #64748B
+skinparam ArrowFontColor #475569
+skinparam componentStyle rectangle
+skinparam component {
+  BackgroundColor #EFF6FF
+  BorderColor #60A5FA
+  FontColor #0F172A
+}
+skinparam database {
+  BackgroundColor #FFF7ED
+  BorderColor #FB923C
+  FontColor #0F172A
+}
+skinparam package {
+  BackgroundColor #F8FAFC
+  BorderColor #CBD5E1
+  FontColor #334155
+}
+
+actor "API client" as client
+
+package "Kubernetes cluster" {
+  package "Serving" {
+    component "Gateway\nGo · SSE · routing" as gateway #DBEAFE
+    database "Redis\nquota · usage" as redis
+    component "vLLM Pods\nmodel replicas" as vllm #DCFCE7
+  }
+  package "Control and scaling" {
+    component "InferenceService\nCRD / scale" as isvc
+    component "Operator\nreconcile" as operator
+    component "KEDA / HPA" as keda #EDE9FE
+    component "AKS Cluster\nAutoscaler" as ca #EDE9FE
+    component "GPU node pool" as nodes #DCFCE7
+  }
+  package "Observability" {
+    component "Prometheus" as prom #FFF7ED
+    component "Grafana" as grafana #FFF7ED
+  }
+}
+
+client --> gateway : chat / SSE
+gateway --> vllm : requests
+gateway --> redis : API key / usage
+isvc --> operator : desired state
+operator --> vllm : Deployment / Service
+prom ..> gateway : scrape
+prom ..> vllm : scrape
+grafana --> prom : query
+keda --> prom : query
+keda --> isvc : update replicas
+ca --> nodes : scales nodes
+nodes ..> vllm : GPU capacity
+
+legend bottom
+  KEDA/HPA scales model Pods; pending Pods can trigger AKS GPU node scaling.
+endlegend
+@enduml
